@@ -1,0 +1,33 @@
+// Carbon React component styles (required — without this all components render unstyled)
+@use '@carbon/react';
+
+// Carbon spacing tokens (used in custom rules below)
+@use '@carbon/react/scss/spacing' as *;
+
+// Carbon theme tokens
+@use '@carbon/react/scss/theme' as *;
+
+// Carbon breakpoint mixins
+@use '@carbon/react/scss/breakpoint' as *;
+
+// Base resets
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  // Carbon's body-short-01 for base text
+  font-family: 'IBM Plex Sans', 'Helvetica Neue', Arial, sans-serif;
+  background-color: $background;
+  color: $text-primary;
+}

@@ -29,7 +29,10 @@ use super::view::breadcrumbs;
 use crate::platform::TrashProvider;
 
 #[allow(clippy::ptr_arg)] // serde's `serialize_with` passes `&PathBuf`.
-fn serialize_path<S: Serializer>(path: &PathBuf, serializer: S) -> Result<S::Ok, S::Error> {
+pub(crate) fn serialize_path<S: Serializer>(
+    path: &PathBuf,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
     serializer.serialize_str(&path.to_string_lossy())
 }
 
@@ -40,6 +43,8 @@ pub enum ReasonKind {
     ScanRoot,
     Inaccessible,
     Missing,
+    /// Changed on disk after the item was found or previewed.
+    Changed,
     SystemPath,
     HomeFolder,
     Trash,
@@ -56,7 +61,7 @@ pub struct Reason {
 }
 
 impl Reason {
-    fn new(kind: ReasonKind, message: impl Into<String>) -> Self {
+    pub(crate) fn new(kind: ReasonKind, message: impl Into<String>) -> Self {
         Self {
             kind,
             message: message.into(),

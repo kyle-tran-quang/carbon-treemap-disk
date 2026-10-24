@@ -45,6 +45,12 @@ pub enum CleanupErrorKind {
     StalePlan,
     NeedsAcknowledgement,
     ScanRunning,
+    /// No discovery has completed, or a newer one replaced it.
+    NoDiscovery,
+    UnknownCandidate,
+    DiscoveryRunning,
+    Cancelled,
+    Other,
 }
 
 #[derive(Serialize, Debug, PartialEq, Eq)]
@@ -55,7 +61,7 @@ pub struct CleanupError {
 }
 
 impl CleanupError {
-    fn new(kind: CleanupErrorKind, message: impl Into<String>) -> Self {
+    pub(super) fn new(kind: CleanupErrorKind, message: impl Into<String>) -> Self {
         Self {
             kind,
             message: message.into(),
@@ -208,12 +214,12 @@ pub fn run_plan(
 }
 
 #[cfg(target_os = "macos")]
-fn make_provider() -> impl TrashProvider {
+pub(super) fn make_provider() -> impl TrashProvider {
     crate::platform::macos::MacTrashProvider::new()
 }
 
 #[cfg(target_os = "macos")]
-fn make_guardrails(app: &AppHandle) -> Guardrails {
+pub(super) fn make_guardrails(app: &AppHandle) -> Guardrails {
     use crate::platform::macos::{AppPaths, app_bundle_or_exe, protected_paths};
 
     let canonical = |path: PathBuf| path.canonicalize().unwrap_or(path);

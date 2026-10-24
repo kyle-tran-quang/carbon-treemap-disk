@@ -12,6 +12,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(commands::scan::ScanState::default())
         .manage(commands::cleanup::CleanupState::default())
+        .manage(commands::cleanup_scan::CleanupScanState::default())
         .invoke_handler(tauri::generate_handler![
             commands::scan::start_scan,
             commands::scan::cancel_scan,
@@ -19,6 +20,10 @@ pub fn run() {
             commands::view::find_node_by_path,
             commands::cleanup::plan_cleanup_items,
             commands::cleanup::execute_cleanup,
+            commands::cleanup_scan::discover_cleanup,
+            commands::cleanup_scan::cancel_discovery,
+            commands::cleanup_scan::plan_cleanup_candidates,
+            commands::cleanup_scan::execute_cleanup_candidates,
             commands::permissions::check_full_disk_access,
             commands::permissions::open_full_disk_access_settings
         ])

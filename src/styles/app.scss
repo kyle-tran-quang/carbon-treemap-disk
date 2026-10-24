@@ -200,3 +200,84 @@
   text-align: end;
   white-space: nowrap;
 }
+
+// Cleanup view (header menu > Clean up caches)
+.cleanup-view {
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-05;
+  // Extra bottom padding so content isn't hidden behind the fixed action bar.
+  padding-block-end: $spacing-09;
+}
+
+.cleanup-view h1,
+.cleanup-view p {
+  margin: 0;
+}
+
+.cleanup-view__summary p {
+  margin: 0;
+}
+
+// Inline toolbar: Select all / Clear selection
+.cleanup-view__bar {
+  display: flex;
+  align-items: center;
+  gap: $spacing-03;
+}
+
+// Fixed bottom action bar — portalled to <body> so position:fixed is never
+// clipped by overflow:hidden or will-change on any app container.
+.selection-action-bar {
+  position: fixed;
+  inset-inline: 0;
+  bottom: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: $spacing-05;
+  padding: $spacing-04 $spacing-05;
+  background-color: $layer;
+  border-top: 1px solid $border-subtle;
+  box-shadow: 0 -2px 6px rgba(0, 0, 0, 0.12);
+  transition: transform 0.15s ease, opacity 0.15s ease;
+
+  &--hidden {
+    transform: translateY(100%);
+    opacity: 0;
+    pointer-events: none;
+  }
+}
+
+.selection-action-bar__count {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.selection-action-bar__buttons {
+  display: flex;
+  align-items: center;
+  gap: $spacing-03;
+}
+
+.cleanup-view__selection {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: $spacing-04;
+}
+
+.cleanup-view__category {
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-03;
+}
+
+.cleanup-view__category-title {
+  margin: 0;
+}
+
+.cleanup-view__category-total {
+  color: $text-secondary;
+}

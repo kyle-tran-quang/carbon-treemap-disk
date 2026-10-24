@@ -6,6 +6,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
+import { revealItemInDir } from '@tauri-apps/plugin-opener';
 
 export type FullDiskAccessStatus = 'granted' | 'missing' | 'unknown';
 
@@ -84,7 +85,8 @@ export type ReasonKind =
   | 'homeFolder'
   | 'trash'
   | 'appData'
-  | 'outsideHome';
+  | 'outsideHome'
+  | 'changed';
 
 export interface Reason {
   kind: ReasonKind;
@@ -152,11 +154,65 @@ export type CleanupErrorKind =
   | 'stalePlan'
   | 'needsAcknowledgement'
   | 'scanRunning'
+  | 'noDiscovery'
+  | 'unknownCandidate'
+  | 'discoveryRunning'
+  | 'cancelled'
   | 'other';
 
 export interface CleanupError {
   kind: CleanupErrorKind;
   message: string;
+}
+
+export type CandidateCategory = 'appCaches' | 'appLogs' | 'xcodeBuildCache' | 'npmCache';
+
+export type SkipReason = 'recent' | 'unreadable' | 'symlink' | 'outsideRoot';
+
+export interface Candidate {
+  /** Valid only for the discovery that produced it. */
+  id: number;
+  category: CandidateCategory;
+  path: string;
+  name: string;
+  kind: 'dir' | 'file';
+  size: number;
+  files: number;
+  /** Seconds since the Unix epoch. */
+  modifiedSecs: number;
+  /** Some entries inside could not be read, so `size` is a lower bound. */
+  incomplete: boolean;
+}
+
+export interface SkippedCandidate {
+  category: CandidateCategory;
+  path: string;
+  name: string;
+  reason: SkipReason;
+}
+
+export interface DiscoveryResult {
+  /** Largest first. */
+  candidates: Candidate[];
+  skipped: SkippedCandidate[];
+  /** Entries left out by name. They are not listed. */
+  excluded: number;
+  totalBytes: number;
+}
+
+export interface DiscoveryProgress {
+  found: number;
+  currentPath: string;
+}
+
+export interface CandidateCleanupResult {
+  results: CleanupItemResult[];
+  moved: number;
+  alreadyGone: number;
+  failed: number;
+  movedBytes: number;
+  /** False if the moved items could not be written to the cleanup log. */
+  logSaved: boolean;
 }
 
 const SCAN_ERROR_KINDS: readonly string[] = [
@@ -221,6 +277,11 @@ const CLEANUP_ERROR_KINDS: readonly string[] = [
   'stalePlan',
   'needsAcknowledgement',
   'scanRunning',
+  'noDiscovery',
+  'unknownCandidate',
+  'discoveryRunning',
+  'cancelled',
+  'other',
 ];
 
 /** Normalises whatever `invoke` rejected with into a `CleanupError`. */
@@ -259,6 +320,49 @@ export async function executeCleanup(
   }
 }
 
+/** Looks for cache and log folders to clean up. Read-only. */
+export async function discoverCleanup(): Promise<DiscoveryResult> {
+  try {
+    return await invoke<DiscoveryResult>('discover_cleanup');
+  } catch (raw) {
+    throw toCleanupError(raw);
+  }
+}
+
+export function cancelDiscovery(): Promise<void> {
+  return invoke<void>('cancel_discovery');
+}
+
+/** Dry run for the chosen candidate ids. Nothing is moved. */
+export async function planCleanupCandidates(ids: number[]): Promise<CleanupPlan> {
+  try {
+    return await invoke<CleanupPlan>('plan_cleanup_candidates', { ids });
+  } catch (raw) {
+    throw toCleanupError(raw);
+  }
+}
+
+/** Moves the items of a candidate plan to the Trash. A plan can be executed once. */
+export async function executeCleanupCandidates(
+  planId: number,
+  acknowledged: boolean,
+): Promise<CandidateCleanupResult> {
+  try {
+    return await invoke<CandidateCleanupResult>('execute_cleanup_candidates', {
+      planId,
+      acknowledged,
+    });
+  } catch (raw) {
+    throw toCleanupError(raw);
+  }
+}
+
+export function onCleanupProgress(
+  handler: (progress: DiscoveryProgress) => void,
+): Promise<UnlistenFn> {
+  return listen<DiscoveryProgress>('cleanup-progress', (event) => handler(event.payload));
+}
+
 export function onScanProgress(
   handler: (progress: ScanProgress) => void,
 ): Promise<UnlistenFn> {
@@ -269,4 +373,9 @@ export function onScanProgress(
 export async function pickFolder(): Promise<string | null> {
   const selected = await open({ directory: true, multiple: false });
   return typeof selected === 'string' ? selected : null;
+}
+
+/** Reveals a file or folder in Finder (macOS) / Explorer (Windows). */
+export function showInFinder(path: string): Promise<void> {
+  return revealItemInDir(path);
 }

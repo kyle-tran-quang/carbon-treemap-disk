@@ -2,11 +2,9 @@ import { useEffect, useRef } from 'react';
 import {
   Breadcrumb,
   BreadcrumbItem,
-  Button,
   InlineLoading,
   InlineNotification,
 } from '@carbon/react';
-import Delete from '@carbon/icons-react/es/TrashCan';
 import { formatBytes } from '../format';
 import type { useExplorer } from '../state/useExplorer';
 import { useScrollMemory } from '../state/useScrollMemory';
@@ -20,18 +18,10 @@ type Explorer = ReturnType<typeof useExplorer>;
 interface TreemapExplorerProps {
   explorer: Explorer;
   theme: string;
-  /** Opens the dry-run preview for the current selection. */
-  onCleanup: () => void;
-  cleanupDisabled: boolean;
 }
 
-export function TreemapExplorer({
-  explorer,
-  theme,
-  onCleanup,
-  cleanupDisabled,
-}: TreemapExplorerProps) {
-  const { current, error, loading, selectedIds, selectionSummary } = explorer;
+export function TreemapExplorer({ explorer, theme }: TreemapExplorerProps) {
+  const { current, error, loading, selectedIds } = explorer;
   useScrollMemory(error ? null : (current?.path ?? null));
 
   // Opening a folder replaces the focused row or link. Without this, keyboard
@@ -120,32 +110,6 @@ export function TreemapExplorer({
         Click to select. Shift or command click to add to the selection. Double-click a
         folder to open it.
       </p>
-
-      <div className="explorer__selection">
-        <span role="status" aria-live="polite">
-          {selectionSummary.count > 0
-            ? `${selectionSummary.count.toLocaleString()} ${
-                selectionSummary.count === 1 ? 'item' : 'items'
-              } selected, ${formatBytes(selectionSummary.size)}`
-            : 'Nothing selected'}
-        </span>
-        {selectionSummary.count > 0 && (
-          <>
-            <Button kind="ghost" size="sm" onClick={explorer.clearSelection}>
-              Clear selection
-            </Button>
-            <Button
-              kind="danger--tertiary"
-              size="sm"
-              renderIcon={Delete}
-              disabled={cleanupDisabled}
-              onClick={onCleanup}
-            >
-              Preview move to Trash
-            </Button>
-          </>
-        )}
-      </div>
 
       <FolderTable
         view={view}

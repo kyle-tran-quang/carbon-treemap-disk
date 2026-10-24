@@ -25,6 +25,7 @@ export default [
         window: 'readonly',
         localStorage: 'readonly',
         HTMLElement: 'readonly',
+        HTMLButtonElement: 'readonly',
         HTMLCanvasElement: 'readonly',
         HTMLDivElement: 'readonly',
         HTMLHeadingElement: 'readonly',

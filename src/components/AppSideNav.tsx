@@ -1,13 +1,23 @@
+import type { MouseEvent } from 'react';
 import { SideNav, SideNavItems, SideNavLink, SideNavDivider } from '@carbon/react';
 import Dashboard from '@carbon/icons-react/es/Dashboard';
 import FolderDetails from '@carbon/icons-react/es/FolderDetails';
+import TrashCan from '@carbon/icons-react/es/TrashCan';
+import type { AppView } from '../views';
 
 interface AppSideNavProps {
   /** Whether the side nav is expanded (passed from HeaderContainer) */
   isSideNavExpanded: boolean;
+  view: AppView;
+  onNavigate: (view: AppView) => void;
 }
 
-export function AppSideNav({ isSideNavExpanded }: AppSideNavProps) {
+export function AppSideNav({ isSideNavExpanded, view, onNavigate }: AppSideNavProps) {
+  const go = (target: AppView) => (event: MouseEvent) => {
+    event.preventDefault();
+    onNavigate(target);
+  };
+
   return (
     <SideNav
       aria-label="Side navigation"
@@ -15,8 +25,23 @@ export function AppSideNav({ isSideNavExpanded }: AppSideNavProps) {
       isPersistent={false}
     >
       <SideNavItems>
-        <SideNavLink href="#" renderIcon={Dashboard} isActive aria-current="page">
+        <SideNavLink
+          href="#treemap"
+          renderIcon={Dashboard}
+          isActive={view === 'treemap'}
+          aria-current={view === 'treemap' ? 'page' : undefined}
+          onClick={go('treemap')}
+        >
           Treemap
+        </SideNavLink>
+        <SideNavLink
+          href="#cleanup"
+          renderIcon={TrashCan}
+          isActive={view === 'cleanup'}
+          aria-current={view === 'cleanup' ? 'page' : undefined}
+          onClick={go('cleanup')}
+        >
+          Clean up caches
         </SideNavLink>
         <SideNavDivider />
         <SideNavLink href="#" renderIcon={FolderDetails}>

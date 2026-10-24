@@ -400,9 +400,179 @@ Open:
 
 ---
 
+### 9. Safe cache cleanup (header menu)
+**Intent:** Find regenerable cache and log folders, show what they are and how much space they take, and move the ones the user approves to the Trash. Safety comes first: the feature only proposes paths from a fixed catalog, never "anything that looks unused".
+
+**Scope (decided by user)**
+- **In scope now: the Safe tier only.** Caches and logs that apps rebuild on demand.
+- **Deferred, not designed here:** the Review tier (`node_modules`, Rust `target/`, old installers, `iOS DeviceSupport`), report-only items, and **duplicate cleanup**. Duplicate cleanup stays in "Future Phases" because it needs hashing and a "which copy do I keep" decision.
+- The design below does not rule these out later, but nothing in this sub-task builds toward them. No `Tier` enum, no tier UI. Add them when they are scheduled.
+
+**Safety model**
+1. **Allowlist, not heuristics.** A fixed catalog of known locations. Nothing outside it can become a candidate.
+2. **The UI never sends a path.** Rust discovers candidates, keeps them with ids, and the UI sends back only ids. Same model as `plan_cleanup_items` / `execute_cleanup` today.
+3. **Trash only, no hard delete.** Same invariant as sub-task 7. The existing `TrashProvider` is reused unchanged.
+4. **Discover, preview, confirm, execute.** The plan is single use and is invalidated by a new discovery, a second execute, or a treemap scan.
+5. **Re-check at execution time.** Guardrails, resolved path, item type and the "changed since preview" check run again, via the existing `move_one`.
+
+**Safe-tier catalog (every path must be verified on a real machine before it ships)**
+
+Candidates are the **direct children** of these folders, one candidate per child, never the parent folder itself:
+
+| Category | Location | Notes |
+|---|---|---|
+| App caches | `~/Library/Caches/*` | Includes Homebrew and pip caches, which live here. `com.apple.*` and this app's own folder are excluded. |
+| App logs | `~/Library/Logs/*` | `com.apple.*` excluded. |
+| Xcode build cache | `~/Library/Developer/Xcode/DerivedData/*` | Only offered if the folder exists. |
+| npm cache | `~/.npm/_cacache` | One candidate. Only offered if it exists. |
+
+Not in the first cut, pending a check of what is on the machine and how each tool behaves: pnpm store (shared and hard-linked), cargo registry cache, other package managers.
+
+**Never a candidate (on top of the existing guardrails)**
+- `~/Library/Application Support`, `Preferences`, `Keychains`, `Containers`, `Group Containers`, `Mail`, `Photos`, and any document folder. They are not in the catalog, and a test proves it.
+- `com.apple.*` folders. Some belong to system services (iCloud sync, Spotlight) and removing them can cause a resync or confusing errors. Judgement call; revisit with evidence.
+- This app's own cache and data (already protected).
+- Anything reached through a symlink. The catalog root and each candidate are resolved, and a candidate whose resolved path leaves its catalog root is dropped. Symlinks inside a candidate are not followed when sizing.
+
+**Extra checks for cleanup (not in sub-task 7)**
+- **Recently modified.** Skip candidates modified within a recent window (constant, default 24 hours), since they are likely in use. The scanner records no modification time (checked: nothing in `scanner.rs` or `scan.rs` stores one), so this needs its own `symlink_metadata` call per candidate. Directory mtime changes only when direct entries change, so it is a weak signal for a cache with nested folders. Treat it as a partial safeguard, not a guarantee.
+- **Running apps.** Show a "quit the app first" note for the Safe tier. Detecting a specific running app from Rust is not decided or verified, so v1 uses a static note.
+- **Sizing.** Reuse `MacScanner` on each candidate folder (hard links once, symlinks not followed) instead of a second walker.
+- **Permissions.** An unreadable candidate is listed as "not accessible" and cannot be selected. Reuse the Full Disk Access notice.
+
+**Expected Outcomes**
+- A "Clean up caches" entry in the header menu opens the cleanup view. It works with or without a finished treemap scan.
+- Discovery runs in the background with progress, can be cancelled, and never modifies anything.
+- Results are grouped by category with size, item count and a one-line "what happens if I remove it". Full paths are available on demand.
+- A confirm modal lists the exact items and the total, and says that space is freed only after the Trash is emptied.
+- Per-item results (moved, already gone, failed with reason) and a total moved.
+- A local log of what was moved and when (original path, size, time), because "Put Back" may be unavailable for items moved with `NSFileManager`.
+- Selection starts empty unless you decide otherwise (see "Pre-selection" below).
+
+**Architecture**
+- `core/cleanup_catalog.rs` (OS-agnostic): `Category`, `Candidate { id, category, path, size, files, mtime }`, plus the filtering rules. It takes catalog roots from the platform layer and does no OS-specific work.
+- `platform/macos/catalog.rs`: the macOS roots above and the `com.apple.*` rule. A Windows catalog would be a separate file later.
+- `commands/cleanup_scan.rs`: `discover_cleanup` (async, cancellable, emits progress), `plan_cleanup_candidates(ids)`, then an execute command.
+- **Design choice (resolve while implementing):** `PlanItem.node` is a tree node id and `apply_results` detaches tree nodes, but candidates are not tree nodes. Prefer a separate candidate plan type that shares `move_one` / `execute`. That leaves the tested tree path untouched.
+- If a treemap scan exists, tell the user to rescan after a cleanup. Do not edit the tree by path.
+- UI: `state/useCleanupScan.ts`, `components/CleanupView.tsx`, `CleanupConfirmModal.tsx` (same Carbon danger-modal pattern, initial focus on Cancel). View switching is a state value (`'treemap' | 'cleanup'`), not a router, so a scan in progress survives switching.
+
+**Header menu (UI shell)**
+- Carbon `HeaderNavigation` with two first-level `HeaderMenuItem`s: "Treemap" and "Clean up caches" (changed by user from a "Tools" dropdown). Mark the current view with `isActive` (`isCurrentPage` is deprecated in the installed Carbon).
+- Carbon hides `HeaderNavigation` at narrow widths, so mirror the entries in the side nav, which already opens from the existing menu button. Do not reuse the `href="#"` placeholders; use `onClick` handlers.
+- Assumption: "shell menu on the header" means navigation in the Carbon header bar. A global-action icon with a `HeaderPanel`, or only a side-nav link, would also fit this plan.
+
+**Todo List**
+1. Write the catalog model and filtering rules with unit tests (no I/O in the rules).
+2. Add the macOS roots. Check each one on a real machine and record which exist and how big they are.
+3. Implement discovery: enumerate roots, apply exclusions and the recent-use window, size with `MacScanner`, support cancellation and progress.
+4. Implement the candidate plan and execute path, reusing `move_one` and the guardrails. Keep single-use plans and the item cap.
+5. Add the cleanup log in the app data directory.
+6. Add `HeaderNavigation`, the side-nav mirror and view switching.
+7. Build `CleanupView` (category groups, selection, size totals, empty and error states) and the confirm modal.
+8. Accessibility: keyboard-only use, focus returns to the menu after the modal closes, announced progress and results, contrast in both themes.
+9. Run the tests below.
+10. Manual run on the real home folder: dry run first, then one small real move. Record results here.
+
+**Tests required before this is called done**
+- Fake home: each catalog category is found; folders outside the catalog are never offered.
+- Exclusions: `com.apple.*`, the app's own caches, recently modified items.
+- A candidate that is a symlink leaving its catalog root is dropped. A symlink inside a candidate pointing at a protected path is not followed and not moved.
+- The UI cannot name a path: an unknown or stale candidate id is rejected, a second execute of one plan is rejected, and a new discovery invalidates the previous plan.
+- Partial failure leaves the other items moved and reports each result.
+- The parent folders (`~/Library/Caches` itself) are never candidates.
+- A source search confirms no permanent-delete call (`remove_file`, `remove_dir_all`) outside tests.
+- Guardrails still block system paths and the home standard folders.
+
+**Risks and open questions**
+- **Trash does not free space.** The user moves GBs to the Trash and sees no change until emptying it. Recommended for v1: keep the no-hard-delete rule and say so plainly in the modal and result. An "Empty Trash" step would break that rule, so it needs your explicit decision.
+- **Pre-selection.** Should the Safe tier start fully selected, or empty? Recommendation: empty in the first version, with a "Select all" control, until it has been used on real data. Needs your call.
+- **Put Back / undo.** Restoring may be manual. The log records original paths. Whether the `trash` crate can report where an item landed on macOS is unchecked.
+- **Cache contents are app-specific.** Removing an active cache can disturb a running app. The recent-use window is weak (see above) and the running-app note is static, so these reduce the risk but do not remove it.
+- **The 24-hour window may hide most results.** Active apps touch their cache folders constantly. Tune it with real data before trusting the default.
+- **Catalog drift.** Tool locations change between versions. Every path is checked, not assumed.
+- **Scale.** `~/Library/Caches` can hold very many files. Discovery must stay cancellable and not block the UI. Not measured yet.
+- **Cloud folders.** The catalog is local-path only and never enters the cloud-sync mounts skipped in sub-task 8.
+
+**Status:** [-] in progress. Todos 1 to 7 done in code and 9 run; **8 and 10 not done**. The feature has never been run in the app.
+
+Decision (user): the shared DerivedData folders (`ModuleCache.noindex`, `SDKExplicitPrecompiledModules` and similar) stay as separate candidates.
+
+Done (todos 6 and 7):
+- `src/ipc/index.ts`: wrappers `discoverCleanup`, `cancelDiscovery`, `planCleanupCandidates`, `executeCleanupCandidates`, `onCleanupProgress`, and the matching types. `ReasonKind` gained `'changed'`, and `CleanupErrorKind` and the `toCleanupError` list gained `noDiscovery`, `unknownCandidate`, `discoveryRunning`, `cancelled`. The shapes were written from the Rust structs, not from a live call.
+- `AppHeader.tsx`: `HeaderNavigation` with a "Treemap" item and a "Tools" `HeaderMenu` holding "Clean up caches". `AppSideNav.tsx` has the same two entries, because Carbon hides the header navigation at narrow widths. Both use `onClick` with `preventDefault`, not the old `href="#"` placeholders. The current view is marked with `isActive` and `aria-current="page"`. `src/views.ts` holds the `AppView` type.
+- `App.tsx` switches views with state, not a router. The scan, the treemap state and the cleanup list live in `AppShell`, so they survive switching. Only the screen is swapped, so the treemap canvas is recreated when you come back. After a switch, focus moves to the new page heading.
+- `state/useCleanupScan.ts`: search (cancellable, with progress), selection, plan, confirm. Selection starts empty, and a new search clears it. After a move, moved and already-gone items leave the list and the selection; failed ones stay. It sends only candidate ids.
+- `components/CleanupView.tsx`: items grouped by category with a one-line effect, a count and size per group, "Select all" and "Clear selection", a live selection total, an empty state, an error state, the "quit the apps first" note, and notes for recent, unreadable and left-out items. `CleanupConfirmModal.tsx` is a danger modal with initial focus on Cancel, the outside-home acknowledgement, the "space is freed only after you empty the Trash" text, per-item results, a warning when `logSaved` is false, and a "scan again" note. After the modal closes, focus goes to the review button, or to the page heading if that button is disabled.
+- `eslint.config.js`: added the `HTMLButtonElement` global, following the existing one-by-one list.
+
+Checks that ran (todo 9): `pnpm check` (typecheck, ESLint with zero warnings, 64 vitest tests, rustfmt, clippy `-D warnings`), `pnpm format:check`, `pnpm build`, and `cargo test` (193 passed, 4 ignored). A source search found no `remove_file`, `remove_dir_all` or `remove_dir` call outside `#[cfg(test)]` modules in `src-tauri/src`; I compared each hit's line number with its file's `#[cfg(test)]` line.
+
+Not verified:
+- **Nothing has been seen in the running app.** There is no DOM test environment, so none of the components has a test. Layout, the header navigation items, the side-nav entries, the modal, the progress bar and both themes are unchecked.
+- The header items are plain links with an `onClick` that calls `preventDefault`. I did not try them with a keyboard or check how the header looks with both items at different window widths. The header navigation hides at narrow widths and the side nav then carries the entries; that switch point was not looked at.
+- Todo 8 is only partly done in code. Focus moves to the page heading on a view switch and back to the review button when the modal closes. The "found" summary (`role="status"`) and the selection total (`aria-live="polite"`) are live regions. The result shown in the modal is a Carbon `InlineNotification`; I did not check whether it is announced when it appears. A screen reader, keyboard-only use and contrast in both themes have not been tried.
+- The search is a single call, so progress shows only a "found so far" count and the path is not shown.
+- Selecting a large number of rows renders one checkbox per row. With 131 candidates on this machine that is likely fine, but a very long list was not tried. The Rust cap is the existing per-plan item limit; hitting it shows a "too many items" error.
+- A search that returns while the modal is open is not possible (the buttons are disabled), but I did not test that path.
+- The "Last changed" column uses the browser's locale date. The "Size is a minimum" tag is shown only when discovery flagged the folder as incomplete.
+- Todo 10 (dry run on the real home folder, then one small real move to the Trash) is not done. The real Trash has not been used by this flow.
+
+Done (todo 5):
+- `core/cleanup_log.rs`: `log_moved` appends one JSON line per item that was moved (time, original path, name, size, file count) to `cleanup-log.jsonl` in the app data directory. Failed and already-gone items are not logged. It only creates the file and appends to it; it never reads, rewrites or deletes anything else.
+- `execute_cleanup_candidates` writes the log after the move. If writing fails, the move still stands and the response sets `logSaved: false`, so the UI can tell the user the record is missing. Logging cannot turn a successful cleanup into an error.
+- 5 tests (only moved items, parent folder created, appends not overwrites, no file when nothing moved, unwritable location returns an error). Full suite 193 passed, 4 ignored; clippy and fmt clean.
+- Not done: nothing reads the log back, and there is no "view history" screen. The path is `app_data_dir()/cleanup-log.jsonl`; I did not check where that resolves on this machine. The log has no size limit or rotation.
+
+Done (todo 4):
+- `core/cleanup_plan.rs`: `plan_candidates` (dry run) and `execute_candidates`. Each candidate is re-checked on disk at plan time and again at execute time: the path must resolve to the same place, still be the same kind of item and not a symlink, have the same modification time as when it was found, and pass the guardrails. A failed check lists the item as excluded (plan) or failed (execute) and it is not moved. It reuses `PlanItem`, `CleanupPlan` and `execute` from sub-task 7, so the Trash call and per-item guardrail check are the existing, tested code. In this flow `PlanItem.node` holds the candidate id.
+- `commands/cleanup_scan.rs`: `discover_cleanup`, `cancel_discovery`, `plan_cleanup_candidates`, `execute_cleanup_candidates`, registered in `lib.rs`, with separate `CleanupScanState`. The UI sends only candidate ids. A plan is single use and is invalidated by a newer plan, a newer discovery, or a second execute. Execution is refused while a search runs. Moved or already-gone items leave the stored list; failed ones stay.
+- Items outside the home folder still need the acknowledgement, as in sub-task 7.
+- Name exclusions now take a list, and the app passes both its bundle identifier and its package name (`carbon-treemap-disk`), so the dev-build cache folder is excluded by name, not only by the recent-use window. This resolves the note from todo 3.
+- Tests: 14 in `cleanup_plan`, 14 in `cleanup_scan`. Full suite 188 passed, 4 ignored; `cargo clippy --all-targets -D warnings` and `cargo fmt --check` clean. The Trash is faked in these tests; the real `MacTrashProvider` was not run for this flow.
+- Not run: nothing has called the new commands from the running app. There is no TypeScript wrapper yet (that is todo 6 and 7).
+- Mistake caught on the way: one of my new tests deadlocked (a lock guard in an argument lived while the callee took the same lock). It hung the test run for over a minute. Fixed by cloning first. The production code does not hold two of these locks at once in that order; this was a test-only bug.
+
+Done (todo 3):
+- `core/cleanup_discovery.rs`: `discover(ctx, cancel, on_progress)` returns `Discovery { candidates, skipped, excluded }`. It uses the `Scanner` and `SizeAccounting` traits, so it stays OS-agnostic. It performs no writes. A symlinked root or child is skipped, and a candidate whose resolved path leaves its root is dropped. Each skip carries a reason (`recent`, `unreadable`, `symlink`, `outsideRoot`). Candidates are sorted largest first and numbered from 1; the ids are only valid for the discovery that produced them.
+- Cancellation is checked before each candidate and passed into the scanner. Progress is reported once per candidate, not per file.
+- 13 new tests on generated fixtures: sizes and file counts, ordering and ids, name exclusions, recent window, symlinked child and root, missing root, whole root, unreadable folder, cancel, no writes, progress, JSON shape. Full suite: 160 passed, 4 ignored. `cargo clippy --all-targets -D warnings` and `cargo fmt --check` are clean.
+- Source search: every `remove_file` / `remove_dir_all` / `remove_dir` call is in test code. No permanent-delete call exists in production code.
+- The tests use a fake scanner that sums plain files. The real `MacScanner` was exercised only by the ignored test below.
+
+Real-machine run (`cargo test --release real_home -- --ignored --nocapture`, read-only, one run, warm cache):
+- 0.81 s. 131 candidates, 23.58 GB total, 119 entries excluded by name, 11 skipped as recent (all `Recent`; none unreadable, symlink or outside the root).
+- Largest: DerivedData `BudgetPlanner-...` 4.3 GB, `Caches/Adobe` 4.0 GB, `.npm/_cacache` 3.0 GB, `Caches/Homebrew` 2.2 GB, `Caches/Google` 2.2 GB.
+- The 24-hour window skipped `GeoServices`, `ollama`, this app's own `carbon-treemap-disk` cache and similar, plus 5 log folders. This is the intended effect.
+- The total (23.58 GB) is higher than my earlier `du` figures for the same folders added together (roughly 13.1 + 0.8 + 6.9 + 2.8 = 23.6 GB before exclusions and skips, then fewer after). The sizes use different rules (`MacScanner` counts allocated bytes and each hard link once; `du -sk` was run once per folder), so I do not treat either as exact. They are close; I did not reconcile them.
+- Note: `~/Library/Caches/carbon-treemap-disk` was skipped only because it was recent, not by name. It is named after the binary, so it is probably a cache of this app's dev build, but I did not confirm that. The name rule and the guardrails use the bundle identifier (`com.carbon.treemap`), which does not match this folder name. Todo 4 must decide whether to also exclude the binary name.
+- DerivedData's shared folders (`ModuleCache.noindex` 777 MB, `SDKExplicitPrecompiledModules` 539 MB) are offered as ordinary candidates. Left as is; flagged for your decision.
+
+Done (todos 1 and 2):
+- `core/cleanup_catalog.rs`: `Category`, `CatalogRoot` (`Children` or `Whole`), `NameRules`, `is_recent`, `stays_inside`, `RECENT_WINDOW` (24 h). Pure functions, no I/O. `platform/macos/catalog.rs`: `catalog_roots(home)` and `name_rules(app_identifier)`. Nothing calls them yet (`#[allow(unused_imports)]` on the re-export; remove it when discovery uses them).
+- Checks that ran: `cargo test` (147 passed, 3 ignored; 15 are new), `cargo clippy -D warnings`, `cargo fmt --check`. No frontend change yet.
+
+Measured on this machine (one machine, one point in time):
+
+| Root | Exists | Size (`du`) | Children | Recent (< 24 h) | Notes |
+|---|---|---|---|---|---|
+| `~/Library/Caches` | yes | 13.1 GB | 220 (21 are plain files, 0 symlinks) | 20 | 116 are `com.apple.*`, about 1.5 GB |
+| `~/Library/Logs` | yes | 0.8 GB | 31 (5 plain files, 0 symlinks) | 5 | |
+| `~/Library/Developer/Xcode/DerivedData` | yes | 6.9 GB | 9 (0 symlinks) | 0 | Mixes project folders with shared ones such as `ModuleCache.noindex` |
+| `~/.npm/_cacache` | yes | 2.8 GB | offered whole | n/a | Last modified about 4,100 hours ago |
+
+- The 24-hour window hides little here: 20 of 220 cache entries and 5 of 31 logs, and by size only about 160 MB (`GeoServices`). It may hide more on a machine in heavy use.
+- Two `du` runs on `~/Library/Caches` disagree: 13.1 GB for the folder, but 15.4 GB for the non-Apple children plus 1.5 GB for the Apple ones. I did not find out why. Discovery sizes with `MacScanner`, not `du`, so compare once discovery exists. Treat all sizes above as approximate.
+- Not in the catalog yet: pnpm (`~/Library/pnpm` exists here) and the cargo registry (`~/.cargo/registry` exists here). How they share or link files is unchecked.
+- DerivedData holds shared folders (`ModuleCache.noindex` and similar) beside per-project ones. Xcode regenerates them, but whether to offer them as separate candidates is undecided.
+- `~/Library/Caches` has plain files at the top level, so a candidate can be a file or a folder. Discovery must not assume folders.
+
+---
+
 ## Future Phases (not in this plan's scope)
 
-- **Duplicate detection:** re-walk files, group by size, then partial hash, then full hash. Uses the small files that MVP aggregates away.
+- **Duplicate detection and duplicate cleanup (deferred by user):** re-walk files, group by size, then partial hash, then full hash. Uses the small files that MVP aggregates away. Cleanup needs a "which copy do I keep" rule and must never remove the last copy.
+- **Review-tier cache cleanup (deferred by user):** `node_modules` and Rust `target/` next to a manifest, old installers in Downloads, Xcode `iOS DeviceSupport`. Builds on sub-task 9.
 - **Stale and unused file analysis:** needs OS-aware signals because last-access times differ in reliability across platforms.
 - **Windows port:** implement the platform traits for Windows. Optional faster scan path that may need elevated rights.
 

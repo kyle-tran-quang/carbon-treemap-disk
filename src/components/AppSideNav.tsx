@@ -1,5 +1,6 @@
 import type { MouseEvent } from 'react';
 import { SideNav, SideNavItems, SideNavLink, SideNavDivider } from '@carbon/react';
+import Copy from '@carbon/icons-react/es/Copy';
 import Dashboard from '@carbon/icons-react/es/Dashboard';
 import FolderDetails from '@carbon/icons-react/es/FolderDetails';
 import TrashCan from '@carbon/icons-react/es/TrashCan';
@@ -42,6 +43,15 @@ export function AppSideNav({ isSideNavExpanded, view, onNavigate }: AppSideNavPr
           onClick={go('cleanup')}
         >
           Clean up caches
+        </SideNavLink>
+        <SideNavLink
+          href="#duplicates"
+          renderIcon={Copy}
+          isActive={view === 'duplicates'}
+          aria-current={view === 'duplicates' ? 'page' : undefined}
+          onClick={go('duplicates')}
+        >
+          Find duplicates
         </SideNavLink>
         <SideNavDivider />
         <SideNavLink href="#" renderIcon={FolderDetails}>

@@ -3,6 +3,7 @@
 
 pub mod cleanup;
 pub mod cleanup_scan;
+pub mod duplicates;
 pub mod permissions;
 pub mod scan;
 pub mod view;

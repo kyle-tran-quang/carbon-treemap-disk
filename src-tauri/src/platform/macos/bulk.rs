@@ -20,14 +20,16 @@ use std::os::unix::ffi::OsStringExt;
 use std::path::Path;
 
 use libc::{
-    ATTR_BIT_MAP_COUNT, ATTR_CMN_DEVID, ATTR_CMN_FILEID, ATTR_CMN_NAME, ATTR_CMN_OBJTYPE,
-    ATTR_CMN_RETURNED_ATTRS, ATTR_FILE_ALLOCSIZE, ATTR_FILE_LINKCOUNT, FSOPT_PACK_INVAL_ATTRS,
-    attrgroup_t, attrlist, attrreference_t,
+    ATTR_BIT_MAP_COUNT, ATTR_CMN_DEVID, ATTR_CMN_FILEID, ATTR_CMN_FLAGS, ATTR_CMN_MODTIME,
+    ATTR_CMN_NAME, ATTR_CMN_OBJTYPE, ATTR_CMN_RETURNED_ATTRS, ATTR_FILE_ALLOCSIZE,
+    ATTR_FILE_DATALENGTH, ATTR_FILE_LINKCOUNT, FSOPT_PACK_INVAL_ATTRS, attrgroup_t, attrlist,
+    attrreference_t,
 };
 
 /// Not exported by the `libc` crate. Value from `<sys/attr.h>`.
 const ATTR_CMN_ERROR: attrgroup_t = 0x2000_0000;
 /// `fsobj_type_t` values from `<sys/vnode.h>`.
+const VREG: u32 = 1;
 const VDIR: u32 = 2;
 
 const BUFFER_SIZE: usize = 256 * 1024;
@@ -51,6 +53,16 @@ pub struct BulkEntry {
     pub inode: u64,
     pub nlink: u32,
     pub allocated: u64,
+    /// The fields below are filled only by `read_dir_bulk_files`.
+    ///
+    /// A regular file, as opposed to a symlink, socket or device.
+    pub regular: bool,
+    /// Logical size in bytes.
+    pub data_length: u64,
+    /// Seconds since the Unix epoch, zero for dates before it.
+    pub modified_secs: u64,
+    /// `st_flags` (`UF_*` and `SF_*`).
+    pub flags: u32,
 }
 
 /// A per-entry failure reported by the kernel (for example EPERM).
@@ -66,11 +78,33 @@ pub struct BulkListing {
     pub errors: Vec<BulkEntryError>,
 }
 
+/// What to ask the kernel for.
+#[derive(Clone, Copy)]
+enum Detail {
+    /// What the treemap scan needs: kind, device, inode, link count, allocated size.
+    Sizes,
+    /// `Sizes` plus logical size, modification time and `st_flags`.
+    Files,
+}
+
 pub fn read_dir_bulk(path: &Path) -> io::Result<BulkListing> {
+    read_dir_bulk_with(path, Detail::Sizes)
+}
+
+/// Like `read_dir_bulk`, and also fills the file fields of `BulkEntry`.
+pub fn read_dir_bulk_files(path: &Path) -> io::Result<BulkListing> {
+    read_dir_bulk_with(path, Detail::Files)
+}
+
+fn read_dir_bulk_with(path: &Path, detail: Detail) -> io::Result<BulkListing> {
     let dir = File::open(path)?;
     BUFFER.with(|buffer| {
         let mut buffer = buffer.borrow_mut();
         let mut listing = BulkListing::default();
+        let (extra_common, extra_file) = match detail {
+            Detail::Sizes => (0, 0),
+            Detail::Files => (ATTR_CMN_MODTIME | ATTR_CMN_FLAGS, ATTR_FILE_DATALENGTH),
+        };
         let mut request = attrlist {
             bitmapcount: ATTR_BIT_MAP_COUNT,
             reserved: 0,
@@ -79,10 +113,11 @@ pub fn read_dir_bulk(path: &Path) -> io::Result<BulkListing> {
                 | ATTR_CMN_DEVID
                 | ATTR_CMN_OBJTYPE
                 | ATTR_CMN_FILEID
-                | ATTR_CMN_ERROR,
+                | ATTR_CMN_ERROR
+                | extra_common,
             volattr: 0,
             dirattr: 0,
-            fileattr: ATTR_FILE_LINKCOUNT | ATTR_FILE_ALLOCSIZE,
+            fileattr: ATTR_FILE_LINKCOUNT | ATTR_FILE_ALLOCSIZE | extra_file,
             forkattr: 0,
         };
         loop {
@@ -189,6 +224,18 @@ fn parse_record(record: &[u8], out: &mut BulkListing) -> io::Result<()> {
     } else {
         0
     };
+    // Packed in ascending bit order: MODTIME and FLAGS come before FILEID.
+    let modified_secs: u64 = if common & ATTR_CMN_MODTIME != 0 {
+        let time: libc::timespec = reader.take()?;
+        time.tv_sec.max(0) as u64
+    } else {
+        0
+    };
+    let flags: u32 = if common & ATTR_CMN_FLAGS != 0 {
+        reader.take()?
+    } else {
+        0
+    };
     let inode: u64 = if common & ATTR_CMN_FILEID != 0 {
         reader.take()?
     } else {
@@ -211,6 +258,11 @@ fn parse_record(record: &[u8], out: &mut BulkListing) -> io::Result<()> {
     } else {
         0
     };
+    let data_length: i64 = if files & ATTR_FILE_DATALENGTH != 0 {
+        reader.take()?
+    } else {
+        0
+    };
     out.entries.push(BulkEntry {
         name,
         kind: if objtype == VDIR {
@@ -222,6 +274,10 @@ fn parse_record(record: &[u8], out: &mut BulkListing) -> io::Result<()> {
         inode,
         nlink,
         allocated: allocated.max(0) as u64,
+        regular: objtype == VREG,
+        data_length: data_length.max(0) as u64,
+        modified_secs,
+        flags,
     });
     Ok(())
 }

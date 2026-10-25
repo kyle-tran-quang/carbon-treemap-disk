@@ -1,3 +1,4 @@
+import { type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { Button } from '@carbon/react';
 import FolderOpen from '@carbon/icons-react/es/FolderOpen';
@@ -24,7 +25,7 @@ export interface SelectionActionBarProps {
   /** Called when the primary action button is clicked. */
   onPrimary: () => void;
   /** Extra action rendered between Show in Finder and the primary button. */
-  secondaryAction?: React.ReactNode;
+  secondaryAction?: ReactNode;
 }
 
 export function SelectionActionBar({

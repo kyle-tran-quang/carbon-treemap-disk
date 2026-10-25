@@ -316,7 +316,7 @@ pub fn plan_cleanup_candidates(
 }
 
 /// File name of the cleanup log inside the app's data directory.
-const LOG_FILE: &str = "cleanup-log.jsonl";
+pub(super) const LOG_FILE: &str = "cleanup-log.jsonl";
 
 /// Records the moved items. Returns whether it worked; the caller reports a
 /// failure to the user but does not treat it as a failed cleanup.

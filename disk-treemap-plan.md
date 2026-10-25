@@ -568,10 +568,296 @@ Measured on this machine (one machine, one point in time):
 - `~/Library/Caches` has plain files at the top level, so a candidate can be a file or a folder. Discovery must not assume folders.
 
 ---
+### 10. Duplicate finder and cleanup
+**Intent:** Find files with identical content, show how much space they waste, and let the user move the extra copies to the Trash. It scans the user's home folder by default, and the user can narrow it to a chosen folder. Safety comes first: the feature must never remove the last copy of a file, and it must not offer anything it cannot prove is identical.
+
+**Status:** [-] in progress. Todos 1 to 10 done; todos 11 and 12 not started. This promotes the "Duplicate detection and duplicate cleanup" item from Future Phases (decided by user).
+
+**Next (todo 11, in this order).** Everything in code is built and checked by tests, but the screen has never been rendered and no command has run inside the app. Step 1 is therefore a look, not a test of safety. Every step needs a person at the running app; I cannot do them from the command line.
+1. **You: launch the app and look** (`npm run tauri dev`). Open "Find duplicates" from the header and the side nav. Check the start screen, the two tiles, the Options accordion and the folder pickers in both themes. Fix any layout problem first; the places most likely to need it are listed under "Done (todo 8)". Also run `npm run lint` and `prettier --check` once more: the `SelectionActionBar.tsx` lint error and the Prettier warnings on `App.tsx` and `app.scss` were there before this work and are still open.
+2. **Make a small test folder** with known contents, for example `~/duplicate-test` holding one 2 MB file copied three times under different names and folders, one different file of the same size, and one tiny file. Scan that folder only. Expect one group of three, the different file not grouped, and the tiny file ignored. Confirm the progress screen appears and Cancel returns to the start screen.
+3. **Dry run:** "Select suggested duplicates", then "Review and move to Trash". Read the preview: each group shows what stays and what moves, and exactly one copy stays. Press Cancel. Confirm nothing moved on disk and the selection is still there. Then try to tick every copy by hand; the last unticked box must stay disabled.
+4. **Protected folder:** repeat with one folder protected. Its copy must show "Protected", have no usable checkbox, and survive the suggestion.
+5. **One small real move:** move one copy from the test folder. Check that the file is in the Trash, the other two copies are untouched, `cleanup-log.jsonl` in the app data folder has an entry with the original path, the group shrinks to two copies and "Empty the Trash to free the space" is shown. Try Put Back in Finder and write down whether it works (the plan already lists this as a risk).
+6. **Stale-state checks in the app:** change one copy on disk after the scan, then preview; it should be listed under "Not included". Start a second scan, then use an old preview; it should be refused.
+7. **Home folder in the app:** run the default scan, watch the progress stages and the time, cancel one run part-way, and run it again to the end. Compare with the 2.55 s warm-cache command-line figure. Do not move anything from the home-folder results in this step.
+8. **Then decide** whether hidden tool folders (`~/Games`, `.lmstudio`, `.ollama`, `.cache`, `.rustup`, `.cargo`) are skipped by default. It is better to decide after step 7 gives a real in-app time. If that time is slow, the same result decides whether the hash cache moves up in Phase B.
+9. **Keyboard and VoiceOver pass** on the start screen, the results list and the confirm modal, using the unchecked list in "Done (todo 9)". Record what was and was not found.
+
+When 1 to 9 are done, write "Done (todo 11)" here with what was seen, what was not, and any fixes. Until then this sub-task stays in progress.
+
+**After todo 11, Phase B order (todo 12), each its own reviewed step:**
+1. Per-group keeper change and "always keep copies in this folder". The Rust ranking already accepts pinned folders but the commands pass an empty list, so this is the only Phase B item with finished back-end work waiting on it.
+2. Hash cache keyed by path, size, modification time and inode. Do it only if step 7 above shows a first scan is too slow. A mismatch must always mean "rehash".
+3. Treemap entry point ("find duplicates in this folder").
+4. File-type filters.
+5. Frontend tests for `useDuplicates` and the IPC error mapping; the project has none for state or components today.
+
+Done (todo 10): required tests checked against the list, one gap closed, real-home run measured.
+- Each "Tests required" item was mapped to an existing test by reading the test names, then spot-checked in the code for cancellation. Covered: grouping and same-name/same-size cases (`core/duplicates.rs`); hard links; empty and small files; symlinks (`file_walker.rs`, `content_hasher.rs`); a file changed after the scan, at plan and at execute time; the last-copy rule, including a missing or changed kept copy; stale and unknown ids, a second execute, a new scan invalidating the plan; partial failure; guardrails; protected folders; deterministic ordering with ties.
+- Gap found and closed: cancellation was tested before the start and during the sample stage, but never during the full-hash stage. Added `cancelling_during_the_full_hash_stage_stops_the_scan` (the scan stops after the first full read).
+- Results: `cargo fmt --check` clean, clippy `-D warnings` clean, `cargo test` 371 passed, 6 ignored (370 before).
+- Source search: no permanent-delete, write, create or rename call in the code before the `#[cfg(test)]` line of any of the seven new files. The only hits are `remove_files` (an in-memory list function, not a file operation) and `OpenOptions` in `content_hasher.rs`, which opens files read-only with `O_NOFOLLOW | O_NONBLOCK`.
+- Real home folder, release build, read-only, warm cache (this run, the home folder had changed since todo 3): 7,631 files listed, 350 groups holding 806 files, 3.35 GB reclaimable, 6.37 GB hashed in full, 0 issues. End to end 2.55 s. Sample stage: 1,288 files in 0.37 s; 842 matched on size and sample, 806 confirmed by the full hash, 36 sample-only false positives (4.3%).
+- Walk with exclusions off: 21,524 files and 10.1 s, 3 cloud folders skipped. With the 4 KiB minimum: 187,264 files in 1.29 s. The default result held in memory is about 1.3 MB.
+- Memory: the test process peaked at 39 MB resident (36 MB footprint) by `/usr/bin/time -l`. That includes a second walk the report does for its false-positive count, so the scan alone is lower. It is a figure for this home folder only.
+- Not verified: cold cache (every figure is a warm-cache run, so real first-run time is unknown and probably longer, since hashing 6 GB is read-bound); an external or spinning disk; iCloud placeholders; a much larger home folder; time through the running app including the progress events. The 2,500 MB/s figure is mostly the page cache.
+- Still open for you: `~/Games` (144 GB), `~/.lmstudio` (28 GB), `~/.ollama` (20 GB), `~/.cache`, `~/.rustup` and `~/.cargo` are scanned. The warm-cache run above includes them and took 2.55 s, but I did not measure how much of the 6.37 GB hashed or the 806 grouped files comes from them, and I have no cold-cache time. I have not excluded them. Say if you want hidden folders skipped by default.
+
+Done (todo 9): accessibility pass, by reading the code and Carbon's source. **Nothing was tested with VoiceOver, a keyboard, or an automated checker such as axe.** The project has no tool for that, and the screen has never been rendered.
+- Fixed: a disabled checkbox cannot take focus, so its reason ("Protected folder: this copy is always kept", "At least one copy must stay") was only a tooltip. It is now part of the checkbox's accessible name as well.
+- Fixed: when the scan state changes (start, finish, cancel, fail) the button that had focus is replaced and focus fell to the page. Focus now moves to the page heading, as on a view switch.
+- Fixed: the scan result was not announced. A visually hidden `role="status"` region now says "Scan started", "Scan finished. Found N groups, about X that could be freed", "No duplicates found", or the error. It waits until the first page of groups has loaded so the numbers are right. The visible summary is no longer a live region, so it is not read twice.
+- Fixed: Carbon's `ProgressBar` announces its helper text politely, and progress events arrive about every 100 ms. The helper text is now only the stage name, which changes three times per scan. The running counts and current path are in a plain paragraph that is not announced.
+- Fixed: the group title in the accordion ran the name and the figures together for a screen reader. A space now separates them.
+- Already in place from the earlier screens: the danger modal opens with focus on Cancel and returns focus to the heading when it closes; Carbon modals trap focus; every control is a real button, checkbox, select or link; the action bar is a polite live region; colour comes from Carbon tokens in both themes.
+- Not checked: tab order across the start screen and the results; whether `RadioTile` is operable by arrow keys in a `TileGroup`; whether an accordion title with several spans reads sensibly; whether the visually hidden status region is read at all in WKWebView; contrast of the tags in the confirm modal (green, red, magenta, gray) in both themes; the screen at narrow widths and with large text; how a 1,000-row list behaves with a screen reader. Whether the tooltip on a disabled checkbox shows at all is also unchecked.
+- Judgement calls: I made the group's accordion title carry the figures, so a screen reader hears them when it lands on the group; that makes the title long.
+
+Done (todo 8):
+- `components/DuplicatesView.tsx` (the screen) and `components/DuplicateConfirmModal.tsx` (the confirm flow). `useDuplicates` now also holds the start-screen options and a selection that tracks its own count and bytes.
+- Start screen: two tiles, "Home folder (recommended)" (the default) and "A folder…" with a folder picker and the existing recent folders. "Protect a folder" is a visible section with an add button and a removable list. An "Options" accordion has the smallest file size (100 KB, 1 MB recommended, 10 MB, 100 MB), the five skip switches (all on) and the cloud-folder toggle (shares the saved setting with the treemap scan). "Find duplicates" is disabled until a folder is chosen when that tile is selected. A line under the button says the scan only reads and one copy always stays.
+- Scanning: a progress bar with the stage in words (listing, comparing samples, confirming matches with bytes read), the current path, and Cancel. The bar has a percentage only when the total is known. A cancelled scan returns to the start screen with an info notice.
+- Results: a summary line (groups and reclaimable space), scan notes (files listed, protected folders, hard links counted once, skipped cloud folders, issue list with the full count), "Select suggested duplicates", "Clear selection", sort (space to reclaim, largest files, most copies), a filter box, and expandable groups. Each group row shows the name, copy count, size, space to reclaim and how many copies are chosen. Each copy has a checkbox, folder, last-changed date, "Suggested to keep" and "Protected" tags, and Show in Finder. "Load more groups" appears when groups are not loaded yet. "New scan" returns to the start screen.
+- The checkbox is disabled for a protected copy, and for the last copy that is not chosen, with a tooltip saying why. Rust still enforces both rules; the UI is only a convenience.
+- The action bar reuses `SelectionActionBar` ("Review and move to Trash"). The confirm modal is a danger modal with initial focus on Cancel. It shows, per group, which copies stay (tagged) and which move, then anything not included and why, and the acknowledgement checkbox for files outside home. After a move it shows the counts, any failures with the reason, how many groups remain, and the "empty the Trash to free the space" note.
+- Checks: `tsc --noEmit` clean, `vite build` succeeds, `vitest` 64 passed, Prettier clean on all new files.
+- Not verified: the screen has never been rendered or clicked. Typecheck and build passing says nothing about layout, focus order or what the Carbon components actually do. Carbon's `Accordion` with a rich `title`, `RadioTile` inside `TileGroup`, and the inline `Select` in the toolbar are the places most likely to need a visual fix. The filter box only searches groups already loaded, and says so when none match. There are no component tests (the project has no component test setup). `npm run lint` still reports the earlier `SelectionActionBar.tsx` error, and Prettier still flags `src/App.tsx` and `src/styles/app.scss`; I did not fix them.
+- Judgement calls to confirm: the size choices stop at four values rather than a free number field. The filter is client-side over loaded groups rather than a Rust search. Pinning a folder as "always keep" is still not in the UI.
+
+Done (todo 7):
+- `src/ipc/index.ts`: types for the scan request, summary, progress, groups page, files, picks, suggested picks, plan, and execute result, matching the camelCase output of `commands/duplicates.rs`. Wrappers: `startDuplicateScan`, `cancelDuplicateScan`, `getDuplicateGroups`, `suggestDuplicatePicks`, `planDuplicateCleanup`, `executeDuplicateCleanup`, `onDuplicateProgress`. All errors go through `toCleanupError`.
+- `CleanupErrorKind` and `CLEANUP_ERROR_KINDS` now include `noDuplicateScan`, `duplicateScanRunning`, `lastCopy`, `protectedFile`, `invalidRoot`, `permissionDenied`. Before this, a Rust error of those kinds would have been shown as `other`.
+- `src/state/useDuplicates.ts`: scan state, group listing with sort and "load more" (page size 50), selection as group id to set of file ids, `selectSuggested`, and the `begin` / `confirm` / `close` flow copied from `useCleanupScan`. Only ids are sent. A late page from an older request is ignored. A new scan clears the selection and the plan state. After a move it reloads as many groups as were on screen.
+- `src/views.ts` has `'duplicates'`. "Find duplicates" is in the header menu and the side nav (the `Copy` icon). `App.tsx` renders `DuplicatesView` and a `SelectionActionBar` for it. `DuplicatesView.tsx` is a placeholder (heading and scan status only); the real screen is todo 8.
+- Checks: `tsc --noEmit` is clean, Prettier is clean on the files I touched, and `vitest` reports 64 passed.
+- Not verified: there are no tests for `useDuplicates` or the new IPC wrappers (the frontend has tests only for pure treemap code), and nothing was run in the real app. `npm run lint` reports one error, `'React' is not defined` in `SelectionActionBar.tsx` line 27, and `prettier --check` flags `src/App.tsx` and `src/styles/app.scss`. All of these were already there: I stashed my changes and got the same results. I left them alone. The `App.tsx` Prettier warning means I could not tell whether my own edits to that file are formatted correctly.
+- Open: `CleanupConfirmModal` and `CleanupView` have `switch` statements on the error kind that do not know the new kinds. They fall to the default text. The duplicate screen will have its own confirm modal in todo 8, so I did not change them.
+
+Done (todo 6):
+- `commands/duplicates.rs`: `DuplicateState` (`active`, `found: Option<Found {groups, home}>`, `pending`, `generation`, `next_plan_id`) plus six commands registered in `lib.rs`: `start_duplicate_scan` (async, cancellable), `cancel_duplicate_scan`, `get_duplicate_groups`, `suggest_duplicate_picks`, `plan_duplicate_cleanup`, `execute_duplicate_cleanup`. The logic sits in plain functions (`resolve_params`, `run_scan`, `store_scan`, `groups_page`, `suggested_picks`, `make_plan`, `run_plan`) so tests do not need a Tauri app.
+- `found` is an `Option`, so "no scan yet" (`noDuplicateScan`) differs from "scan found nothing" (empty groups).
+- Scan request: root must be absolute, existing and a folder (canonicalised); minimum size defaults to 1 MiB with a floor of 4 KiB; protected roots are de-duplicated; a scan root equal to or inside a protected root is refused; an unreadable protected folder is refused rather than ignored.
+- Paging: default 50 groups, cap 200; sort by `wastedSpace`, `fileSize` or `copyCount`. The summary lists at most 100 issues but sends the full count. `suggested_picks` stops at the 1,000-move plan cap and sets `truncated`.
+- Plans are single-use, cleared by a newer scan, checked against the scan generation, and need the acknowledgement for paths outside home, as in `cleanup_scan`. After execute, `remove_files` (new in `core/duplicate_plan.rs`, 4 tests) shrinks groups; a group with fewer than two copies or no movable copy leaves the list. The log goes to `cleanup-log.jsonl` through `log_moved`, and `logSaved` is reported.
+- Progress event `duplicate-progress`: `stage` (`listing`, `fingerprinting`, `hashing`), `done`, `total`, `bytes`, `currentPath`.
+- `CleanupErrorKind` gained `NoDuplicateScan`, `DuplicateScanRunning`, `LastCopy`, `ProtectedFile`, `InvalidRoot`, `PermissionDenied`. `KeepReason` now derives `Serialize`. `LOG_FILE` in `cleanup_scan.rs` is `pub(super)`. New constants in `core/config.rs`: `MIN_DUPLICATE_MIN_SIZE_BYTES`, `MAX_DUPLICATE_GROUPS_PER_PAGE`, `MAX_DUPLICATE_ISSUES_SHOWN`, `MAX_DUPLICATE_MOVES_PER_PLAN`.
+- 45 new tests in `commands/duplicates.rs`. `cargo fmt --check` and clippy `-D warnings` are clean; `cargo test` reported 370 passed, 6 ignored (321 before).
+- Mutation checks, done by hand and reverted (file diffed identical): ignoring the generation made 1 test fail; not clearing the pending plan on a new scan made 1 fail; not consuming the plan made 1 fail.
+- Source search: `remove_file`, `remove_dir` and `fs::write` appear in `commands/duplicates.rs` only after the `#[cfg(test)]` line (864).
+- Judgement calls to confirm: the commands pass an empty pin list to `KeepPreferences`, so "always keep copies in this folder" is not reachable from the UI yet (Phase B). The new error kinds were added to the shared `CleanupErrorKind`, so todo 7 must extend `CLEANUP_ERROR_KINDS` in `src/ipc/index.ts`.
+- Not verified: the Tauri commands have never been invoked from the running app. The real macOS Trash was not used (fake provider). The progress event was not observed end to end. `PermissionDenied` for a protected folder is untested.
+
+Done (todo 5):
+- `core/duplicate_plan.rs`: `plan_duplicates(groups, picks, guardrails)` builds a dry-run `DuplicatePlan` and performs no writes. `execute_duplicates(groups, plan, guardrails, provider)` moves the planned copies. It reuses `PlanItem`, `ItemResult`, `ExcludedItem`, `Guardrails` and `execute` (so `move_one` and its guardrail check) from `cleanup`. `PlanItem.node` and `ItemResult.node` hold the file id. `MAX_DUPLICATE_MOVES_PER_PLAN` (1,000, same as the other cleanup plans) is in `core/config.rs`.
+- Input is a group id plus file ids per pick. All picks for one group are merged before the last-copy rule runs, so two picks that each leave a different copy cannot add up to every copy (tested). An unknown group, an unknown file, a protected file, a selection that moves every copy, or too many moves refuses the whole plan with a `PlanError`. Nothing is partly planned.
+- Plan-time checks per copy to move: the path resolves to the same place, it is a regular file (a symlink or folder is refused), size and modification time match the scan, and the guardrails allow it. A failure puts that copy in `excluded` with a reason (`missing`, `changed`, or the guardrail reason). A copy that stays gets the same disk check without the guardrails; if none of the copies that stay still match, nothing in that group is planned.
+- Execute-time checks, before every single move: the group is still in the scan; the planned moves still pass `check_selection` (so a forged plan that covers every copy, or names a protected copy, moves nothing); the file's id and path match the scan; a copy that stays is still on disk with the same size and time; the disk check and guardrails again; then `move_one`. If a kept copy vanishes part-way through a group, the rest of that group is not moved (tested). A failure on one file does not stop the others. A group that is refused does not stop other groups.
+- A plan group lists the copies that stay (`kept`) so the confirmation can show them, and the copies to move, largest total first.
+- 34 new tests on temp-folder fixtures with a fake trash. `cargo test` reported 321 passed, 6 ignored (287 passed, 6 ignored before). `cargo fmt --check` and clippy `-D warnings` are clean.
+- Mutation check, done by hand and then reverted (the file was diffed against a copy and is identical): removing the keeper check at execute time made 4 tests fail; making execute ignore a failed last-copy check made 2 tests fail. The first attempt at the second mutation did not compile, so it was redone another way.
+- Source search: no `remove_file`, `remove_dir` or `fs::write` before the `#[cfg(test)]` module in `duplicate_plan.rs`.
+- Not done here, left for todo 6: single-use plan storage, invalidation by a new scan, the acknowledgement for paths outside home, and writing the log. The pure functions do not know about any of them.
+- Not verified: it has never run against the real macOS Trash; the fake provider stands in. Only whole seconds of modification time are compared, so a file edited within the same second and left the same size passes the check. A copy that is a hard link to a kept copy would have been collapsed by the scan, so it cannot appear here, but I did not test a hard link created after the scan. The group-ordering test uses two temp roots and a guardrail with no home folder, which is not how the app will call it.
+
+Done (todo 4):
+- `core/duplicate_keep.rs`: pure functions, no filesystem access. `suggest(group, prefs)` returns the keeper, the copies that can go with it, and the `KeepReason` that decided it (with plain-words text for the UI). `check_selection(group, move_ids)` is the last-copy rule. `moves_keeping(group, keeper)` gives the moves for a keeper the user chose. `KeepPreferences::new(home, pinned)` carries the "always keep copies in this folder" pins.
+- Ranking order, first rule that differs decides: protected copy, pinned folder, not in Downloads/Desktop/Trash, not a copy-style name, oldest modification time (an unknown time counts as newest), shortest path, file name, full path. The order does not depend on the order of the files in the group (tested by rotating and reversing).
+- Copy-style names recognised: `name (N)` with 1 to 3 digits, `name copy`, `name copy N`, `name - copy`, `copy of name`. `name (2024)`, `name 2`, `copyright` and `photocopy` are not. This is a judgement-based list and was not checked against real file names.
+- "Poor location": `~/Downloads` and `~/Desktop` (needs the home folder passed in) and any folder named `.Trash` or `.Trashes` at any depth. Matching is by whole path components and case-insensitive, so `Downloads-archive` does not match `Downloads`.
+- Last-copy rule: every id must belong to the group, none may be protected, and at least one copy must stay. Repeated ids count once. A test runs every subset of a four-file group (one protected) and checks that none empties the group and none moves the protected file.
+- A suggestion is never a protected file in `moves`, and always passes `check_selection` (tested).
+- `fold` in `duplicates.rs` became `pub(super)` so the ranking uses the same case folding as protection. `is_under` stays private.
+- 31 new tests. `cargo test` reported 287 passed, 6 ignored (256 passed, 6 ignored before). `cargo fmt --check` and clippy `-D warnings` are clean.
+- Not verified: the ranking has not been run over real groups, so how well the suggestion matches what you would pick is untested. The Downloads/Desktop rule uses the home folder passed in, so a scan of another user's or another volume's folder only gets the Trash rule. A pinned folder that is a symlink path is compared by text, not resolved.
+
+Done (todo 3):
+- `platform/macos/content_hasher.rs`: `MacContentHasher` implements `ContentHasher` with BLAKE3 (`blake3` 1.x, default features only: no `rayon`, no `mmap`). Hashing is single-threaded per file because the engine already hashes several files at once.
+- Files are opened with `O_NOFOLLOW | O_NONBLOCK` and must be regular files. A symlink, FIFO, device or folder that appeared after the walk is refused (`InvalidInput`, or an open error for a symlink) instead of followed or waited on.
+- Partial fingerprint: the size plus the first and last 64 KiB. Files up to 128 KiB are fingerprinted whole. Full hash: 1 MiB reads, cancel checked before each read, `ErrorKind::Interrupted` on cancel.
+- A file whose length differs from the walked size, or that shrinks or grows during the read, fails with `InvalidData`, which the engine already reports as a file that changed.
+- 14 new tests: equal content, hash equals `blake3::hash` of the bytes (3 chunks plus a remainder), different last byte, partial sees a change in the first or last block, partial misses a middle change and the full hash catches it, small files hashed whole, cancel, missing file, permission denied, symlink refused, FIFO refused without blocking, folder refused, stale size, and shrink/grow detection. `cargo test` reported 256 passed, 6 ignored (242 passed, 5 ignored before). `cargo fmt --check` and clippy `-D warnings` are clean.
+- Source search: the new file opens files read-only and contains no `remove_file`, `write` to a user file or `rename` outside `#[cfg(test)]`.
+- Release binary: 4,523,376 bytes with BLAKE3. The earlier figure was recorded as "4.4 MB" without an exact byte count, so the increase is about 0.1 MB at most and not precisely measured.
+
+Real-machine run on `$HOME` (`cargo test --release real_home_hash -- --ignored --nocapture`, read-only, default options, one run, warm cache):
+- End to end: 2.46 s. 6,966 files listed, 339 groups holding 779 files, 3.29 GB reclaimable, 6.24 GB read by the full hash, 0 issues.
+- The partial stage, re-run on its own: 1,252 files sampled in 0.37 s. 807 matched on size and partial fingerprint; 779 were confirmed by the full hash. So about 28 files (3.5% of the partial matches) were partial-only false positives that the full hash removed. This confirms the partial stage is a filter, not proof.
+- The "28" subtracts the engine's group file count from a second walk's partial-match count. The two walks ran seconds apart, so a file changing between them would shift it by a few. Treat it as approximate.
+- The 2,542 MB/s figure is bytes hashed divided by total elapsed time on a warm page cache. It is not disk throughput. A cold cache, an external disk and a network volume were not tried.
+- Decision still open: the large hidden tool folders (`~/Games`, `~/.lmstudio`, `~/.ollama`, `~/.cache`, `~/.rustup`, `~/.cargo`) are walked and hashed. At 2.46 s warm the cost does not argue for excluding them, but this run does not show a cold-cache cost. Keep as is until you decide.
+- Not verified: behaviour on a file changing mid-read in a real running system (covered only by a fixture that passes a wrong expected length); `O_NONBLOCK` on network filesystems; files with extended attributes or compression flags other than `SF_DATALESS`; the NEON path was not checked separately from the default build.
+
+Done (todo 2):
+- `core/duplicate_exclusions.rs`: pure rules, no filesystem access. `Exclusions` has one switch per kind: packages (`.app`, `.photoslibrary`, `.xcarchive`, `.framework`, `.xcodeproj` and similar), `node_modules`, `.git`, `~/Library` and `~/.Trash`. The `Library` and `.Trash` rules apply only directly under the home folder. A rule applies to folders below the chosen root, never to the root itself: choosing `~/Library/Caches` or a folder named `node_modules` walks it as asked.
+- `platform/macos/file_walker.rs`: `MacFileWalker` implements `FileWalker`. Same design as `MacScanner` (workers read one directory each, one collector). It keeps every regular file at or above the minimum size, skips symlinks, sockets and devices, stays on the root's volume, skips excluded folders and cloud-sync folders (reported, opt-in to include), and skips "dataless" cloud placeholders (`SF_DATALESS`) so a later hash cannot trigger a download. The walker never opens file contents.
+- `platform/macos/bulk.rs`: new `read_dir_bulk_files` also returns the regular-file flag, logical size, modification time and `st_flags`. `read_dir_bulk` (used by the treemap scan) asks for exactly the same attributes as before, so the treemap path is unchanged; the existing scanner tests still pass. A portable `readdir` + `lstat` fallback is used where `getattrlistbulk` is unsupported.
+- `DuplicateOptions` gained `exclusions`.
+- 26 new tests on generated fixtures (9 for the rules, 17 for the walker): size filter, metadata, symlinks, hard links, each exclusion, root-named-like-an-exclusion, home-relative rules, cloud skip/include/root-inside-mount, unreadable folder, bad roots, cancel, progress, and bulk-versus-portable agreement. `cargo test` reported 242 passed, 5 ignored (216 passed, 4 ignored before). Clippy `-D warnings` and `cargo fmt --check` are clean.
+- Source search: no `remove_file`, `remove_dir_all` or `remove_dir` in the new files outside the `#[cfg(test)]` module.
+
+Real-machine walk of `$HOME` (`cargo test --release real_home_walk -- --ignored --nocapture`, read-only, lists files only, one run each, warm cache):
+
+| Setting | Files | Distinct inodes | Total | Time |
+|---|---|---|---|---|
+| default (1 MiB, exclusions on) | 6,773 | 5,934 | 230.71 GB | 0.60 s |
+| exclusions off | 20,615 | 18,293 | 343.01 GB | 8.48 s |
+| 4 KiB minimum, exclusions on | 172,897 | 156,929 | 240.50 GB | 1.11 s |
+
+- With the defaults there were 0 issues and 0 cloud folders skipped, because `~/Library` (where the cloud mounts live) is excluded first. With exclusions off, 3 cloud folders were skipped and 1 issue was reported; I did not look at that issue.
+- Excluding `~/Library`, packages, `node_modules`, `.git` and `.Trash` removes about 112 GB and about 14,000 files at the 1 MiB minimum. `~/Library` is du 216 GB on this machine, so it is the largest of those; I did not split the difference between the five rules.
+- Hard links: 839 of the 6,773 default paths share an inode with another path. They would be collapsed, not reported as duplicates.
+- Result held in memory at the default minimum: about 1.1 MB (computed from path lengths plus struct size, not measured with a profiler). At a 4 KiB minimum the file count is 25 times larger; I did not compute that memory figure.
+- Survey on this machine before writing the rules: `~/.Trash` exists and is empty; `~/Library` has `CloudStorage` and `Mobile Documents`; outside `~/Library` there are 55 `node_modules` folders, 37 `.git` folders and 15 package folders (7 `.app`, 3 `.xcodeproj`, 3 `.musiclibrary`, 1 `.photoslibrary`, 1 `.imovielibrary`).
+- Large non-hidden and hidden folders are NOT excluded: `~/Games` (144 GB), `~/.lmstudio` (28 GB), `~/.ollama` (20 GB), `~/.cache`, `~/.rustup`, `~/.cargo`. Only `.git` and `.Trash` are excluded among hidden folders. These will be walked, and their large files with a matching size will be fully hashed in todo 3. Whether to exclude hidden folders, or these specific tool folders, is a decision for you; the plan's earlier "include hidden" option is not implemented.
+- Not verified: the dataless skip has no test (a placeholder cannot be created in a fixture); the `ENOTSUP` fallback to the portable reader is not exercised; the two read modes were compared on a small fixture only, not on the real home folder; external and network volumes and a cold cache were not tried; the packages list and the `st_dev` comparison (low 32 bits, as in the scanner) were not checked against volumes other than the boot volume.
+
+Done (todo 1):
+- `core/duplicates.rs`: `find_duplicates(walker, hasher, request, cancel, on_progress)` runs the pipeline: list, collapse hard links, group by size, partial fingerprint, full hash. It is read-only. Types: `DuplicateOptions`, `WalkedFile`, `WalkOutput`, `DuplicateGroup`, `DuplicateFile`, `DuplicateScan`, `DuplicateProgress`, `Stage`, `DuplicateError`.
+- Traits: `FileWalker` in `platform/mod.rs` and `ContentHasher` in `core/duplicates.rs`. Neither has a real implementation yet (todos 2 and 3). `DEFAULT_DUPLICATE_MIN_SIZE_BYTES` (1 MiB) is in `core/config.rs`.
+- Reference-folder mode is in the engine: files under a protected root are flagged `protected`. A group made only of protected files is dropped. A hard link to a protected file keeps the protected flag. `reclaimable_files` counts every unprotected file when a protected copy exists, and all but one otherwise.
+- Behaviour to know about: an unreadable file is recorded as an issue and leaves its group (a group of three with one unreadable becomes a group of two). An unreadable root, including a protected one, fails the whole scan, so a protected folder can never be silently unprotected. Empty files are always ignored, even with `min_size` 0.
+- Group and file ids are numbered from 1 and ordered by reclaimable bytes, then size, then path, so they are the same for any thread count (tested at 1 and 4 threads).
+- 23 tests with a fake walker and a fake hasher. `cargo test` reported 216 passed, 4 ignored (193 before). `cargo clippy --all-targets -D warnings` and `cargo fmt --check` are clean.
+- Not done or not verified: nothing reads real files yet, so nothing here has run on a real disk. Progress for the listing stage depends on the walker. Memory use is not measured; `find_duplicates` holds every listed path as a `PathBuf`, which will matter on a large home folder (see "Performance and memory"). Several "Tests required" items belong to later todos (plan, execute, last-copy rule, IPC) and are not covered. The paths in a group are compared lower-cased for protection only; two paths that differ only by case are otherwise treated as different files.
+
+**Scope**
+- **In scope:** exact duplicates only (same bytes). Home folder by default; a user-chosen folder; a reference (protected) folder; Move to Trash only.
+- **Not in scope (see "Later"):** similar or near-duplicate images, duplicate-folder grouping, replacing copies with hard links or clones, permanent delete.
+
+**How it fits the existing code**
+
+| Existing piece | Reuse |
+|---|---|
+| `Scanner` trait / `MacScanner` | **Not reusable as is.** It builds the tree and folds files under 1 MiB into counters, so individual small files are gone. The finder needs its own file walker (`FileWalker` trait in `platform/`, macOS impl reusing the `getattrlistbulk` reader code). |
+| `ScanOptions.include_cloud_folders`, `platform/macos/cloud.rs` | Reuse. Cloud folders stay skipped by default, for the same latency reason as sub-task 8. |
+| `Guardrails`, `move_one`, `TrashProvider`, `execute`, `cleanup_log` | Reuse unchanged. No new Trash code, and still no hard delete anywhere. |
+| `CleanupPlan` / `PlanItem` | Reuse for the preview. In this flow `PlanItem.node` holds a file id, as it holds a candidate id in sub-task 9. |
+| Plan model from sub-tasks 7 and 9 (Rust owns the plan, UI sends ids, single use, invalidated by a newer run, re-checked at execute) | Same model. |
+| `ActiveGuard` / `CancelToken` / progress events | Same pattern, with its own `DuplicateState`. |
+| `AppView`, header menu, `SelectionActionBar`, `CleanupConfirmModal` | Extend `AppView` with `'duplicates'`; same nav pattern; same modal pattern (danger modal, initial focus on Cancel). |
+| `ScanPanel` recent roots (`recentRoots`) | Reuse for the folder choice. |
+
+**Detection pipeline (`core/duplicates.rs`, OS-agnostic)**
+1. **Walk.** Collect regular files at or above the minimum size. Record `(size, device, inode, path)`. Do not follow symlinks. Skip cloud folders, other volumes (`cross_volumes = false`) and the default exclusions below.
+2. **Same inode is not a duplicate.** Hard links to one inode are one file. Collapse them before grouping, and report them as "already shared" rather than as waste.
+3. **Group by exact size.** Drop every file whose size is unique. This removes most of the disk with no file reads.
+4. **Partial fingerprint.** Hash the first and last blocks of each remaining file (block size is a constant, to be tuned). Drop unique fingerprints.
+5. **Full hash.** Hash the whole content of what is left with a fast cryptographic hash. BLAKE3 is the leading candidate because it is fast and multi-threaded, but **verify the crate and its current API before adding it**.
+6. **Optional byte compare at plan time.** Before anything moves, re-read the kept copy and each copy to be moved and confirm they still match. A hash collision or a file edited since the scan then cannot cause a loss.
+
+Each stage reports progress (files listed, files compared, bytes hashed) and honours the `CancelToken`. Groups are emitted as they are confirmed, so the user can start reviewing before the scan ends.
+
+**Scope selection (the user's requirement)**
+- **Default: the user's home folder (decided by user).** `/` and other volumes are not scanned by default, so no system-area exclusion list is needed. A folder outside home can still be chosen with the picker. Full Disk Access still matters for protected folders inside home; reuse `FullDiskAccessNotice` and show how many paths were unreadable.
+- **Choose a folder.** Folder picker (`pickFolder`), recent folders (reuse `recentRoots`, with a separate list so it does not mix with treemap roots).
+- **From the treemap.** "Find duplicates in this folder" when one folder is selected in the treemap action bar. This is the quickest way to scan a target folder.
+- **Reference folder (first release, decided by user).** Pick a "protected" folder and a "scan" folder. Only files in the scan folder can be moved; the protected folder is never touched. Answers "which of these downloads do I already have in my library?" and is the safest mode.
+
+**Defaults that keep the result useful and the scan fast**
+- **Minimum size: 1 MiB** (matches the treemap's small-file threshold, and keeps the file list small). Choices in the UI: any size above 4 KiB, 100 KiB, 1 MiB, 10 MiB, 100 MiB. Zero-byte files are never grouped.
+- **Excluded by default, each with an "include" switch:** application bundles and other package folders (`.app`, `.photoslibrary`, `.xcarchive` and similar), `node_modules`, `.git`, `~/Library` (its contents are mostly app-owned), and the Trash. Duplicates inside these are almost always intentional or app-managed, and removing them breaks things. The list is judgement-based; revisit with real data.
+- **Cloud-synced folders: skipped**, with the existing toggle.
+- **File-type filter** (display only, after detection): Images, Video, Audio, Documents, Archives, Other.
+
+**Safety model**
+1. **The UI never sends a path.** Rust holds the groups with ids. The UI sends back, per group, the ids to move.
+2. **The last copy cannot go.** Planning rejects any selection that moves every member of a group, and rejects a group whose kept member no longer exists or no longer matches. Enforced in Rust, not only in the UI.
+3. **Trash only.** The existing invariants hold. Source search for `remove_file`, `remove_dir_all` and `remove_dir` outside tests must stay clean.
+4. **Re-check at execute time:** resolved path, still a regular file, size and modification time unchanged since the scan, guardrails (sub-task 7), and the kept copy still present and matching.
+5. **Single-use plan,** invalidated by a new duplicate scan, a second execute, or a tree rescan, same as sub-tasks 7 and 9.
+6. **Honest numbers.** "Wasted space" is `(copies - 1) x size` per group. Moving to the Trash frees nothing until the Trash is emptied, and APFS clones share blocks, so removing a clone may free little or nothing. Say so in the preview.
+
+**Keep-one rules (which copy survives)**
+Rust ranks the members of each group and marks one as the suggested keeper. The rule is shown to the user in plain words.
+- Prefer the copy in a "real" location over `Downloads`, `Desktop`, the Trash, or a path with a copy-style name such as `file (1).pdf` or `copy of`.
+- Then prefer the oldest modification date (the original), then the shortest path, then the name sorted first.
+- The user can change the keeper per group, or set "Always keep copies in this folder" for a whole run. That pin is a priority for the ranking, and it can override the suggestion only inside the user's own choice, never the last-copy rule.
+
+**Selection and cleanup flow**
+- **Selection starts empty (decided by user).** A single button, "Select suggested duplicates", fills the selection from the keep-one rules, and the user can review every row before confirming.
+- The confirm modal lists each group with the copy being kept and the copies being moved, the total, and the Trash note. A group that contains a path outside the home folder needs the existing acknowledgement.
+- Per-item results (moved, already gone, failed with reason), then written to `cleanup-log.jsonl` like sub-task 9.
+- After a move, groups shrink in place. A group left with a single member disappears. The summary updates ("2.1 GB moved, 1.3 GB still reclaimable"). No full rescan is needed.
+
+**IPC design**
+- `start_duplicate_scan({ root | null, options })` is async and cancellable. `null` means the home folder. Progress arrives as `duplicate-progress` events with the stage, counts and bytes. `cancel_duplicate_scan`.
+- `get_duplicate_groups({ sort, filter, offset, limit })` returns one page. The group list can be huge, so the UI never receives it all at once (same idea as the bounded `get_view`). Cap the page size as a constant, as `MAX_VIEW_NODES` does.
+- `plan_duplicate_cleanup({ picks: [{ group, files }] })` and `execute_duplicate_cleanup({ planId, acknowledged })`. Error kinds follow `CleanupErrorKind`, plus `lastCopy` and `noDuplicateScan`.
+- Types are added to `src/ipc/index.ts`, written from the Rust structs and checked against a live call.
+
+**UI**
+- New view `'duplicates'`. Header: "Treemap", then a "Tools" menu with "Clean up caches" and "Find duplicates" (mirrored in the side nav, as in sub-task 9).
+- **Start screen:** two Carbon selectable tiles, "Home folder (recommended)" and "A folder...", an optional "Protect a folder" picker (reference mode), recent folders, and an expandable "Options" section (minimum size, include hidden and package folders, cloud folders). A line says how long a home-folder scan usually takes, once measured.
+- **While scanning:** a staged progress bar ("Listing files", "Comparing sizes", "Checking content"), counts, and a Cancel button. Groups appear as they are confirmed.
+- **Results:** a summary line ("12.4 GB can be reclaimed in 3,204 groups"), sort (wasted space, file size, copy count), filter by file type and by folder, and a search box. Each group is an expandable row. Each file row has a checkbox, the folder path with the file name emphasised, modified date, a "Suggested to keep" tag, and "Show in Finder". A keyboard-reachable list; every action is a real control.
+- **Delight, kept simple:** a "Reclaimable" figure that counts down as the selection grows; per-type breakdown bar; an empty state that says "No duplicates found" and what was searched; "Open in Finder" and, if feasible, Quick Look, so the user can look before deleting.
+- Carbon components to check against the installed version before use: `TileGroup`/`RadioTile`, `ExpandableTile` or `TableExpandRow`, `ProgressBar`, `Tag`, `Search`, `Dropdown`.
+- Accessibility follows sub-tasks 8 and 9: focus to the page heading on view switch, focus back to the review button after the modal closes, live regions for progress and results, contrast in both themes.
+
+**Performance and memory (to be measured, not assumed)**
+- A home-folder file list can be large. Store paths as a parent-directory arena plus names, as the tree does, and drop unique-size files early. Record peak footprint on a real home folder.
+- Hashing is read-bound. Parallelism that helps an SSD can hurt a spinning or external disk; the thread count is a constant to tune, as sub-task 3 did.
+- A persistent hash cache keyed by `(path, size, modified time, inode)` in the app data directory would make repeat scans fast. This is phase B, and it must treat a mismatch as "rehash", never as "identical".
+- Reading file contents may trigger the download of cloud placeholders. Skip any file with the `dataless` flag, as sub-task 8 observed that flag in Box.
+
+**Phases**
+- **Phase A (the feature, usable end to end):** engine pipeline, home folder and chosen folder, reference-folder mode, exclusions and minimum size, paged group list, keep-one rule, last-copy rule, plan and execute through Trash, log, start screen, progress, results, confirm modal.
+- **Phase B (the polish):** treemap entry point, type filters and search, per-group keeper change and "always keep in this folder", hash cache, Show in Finder, selection counter.
+- **Later (needs separate decisions):** duplicate folders (a folder whose files all exist elsewhere); near-duplicate images; replacing a copy with an APFS clone or hard link so both paths stay and space is reclaimed. That last one changes files in place and breaks the "Trash only" rule, so it needs an explicit decision. Detecting existing APFS clones (to avoid promising space that will not come back) may be possible through the extended clone-id attribute of `getattrlist`; this is unverified and needs a check on a real volume.
+
+**Todo List**
+1. [x] Write the pipeline in `core/duplicates.rs` against a `FileWalker` trait and a hash function trait, with fake implementations for tests (no I/O in the grouping rules).
+2. [x] Implement the macOS `FileWalker` (reuse the bulk reader) and the exclusion rules, with the home folder as the default root. Check each excluded path on a real machine and record it here.
+3. [x] Add the hash dependency after verifying the crate and its current API. Implement partial and full hashing with cancellation and throttled progress.
+4. [x] Implement keep-one ranking and the last-copy check as pure functions.
+5. [x] Implement plan and execute for duplicate groups, reusing `move_one`, guardrails and the log. Single-use plans, item cap, re-check at execute.
+6. [x] Add commands, register them in `lib.rs`, and add `DuplicateState`.
+7. [x] Add the TypeScript wrappers, `useDuplicates` state and the `'duplicates'` view with the header and side-nav entries.
+8. [x] Build the start screen, progress, results list and confirm modal (in code; never rendered).
+9. [x] Accessibility pass for the new screens (code review only; nothing tested with a keyboard or screen reader).
+10. [x] Run the tests below, then measure on a real home folder (warm cache only).
+11. [ ] Manual run: dry run on a real folder, then one small real move. Record results here. See "Next" above for the steps.
+12. [ ] Phase B items, each as its own reviewed step. See "Next" above for the order.
+
+**Tests required before this is called done**
+- Fixture trees: identical files in different folders are grouped; same size but different content are not; same name but different content are not.
+- Hard links to one inode are one file, not a duplicate group.
+- Empty files and files under the minimum size are never grouped. A symlink is never followed or grouped.
+- A file that changes between hashing and plan time is rejected at plan time and again at execute time.
+- Last-copy rule: a selection covering every member of a group is rejected, and so is a selection whose kept member has gone missing or changed.
+- The UI cannot name a path: unknown or stale ids are rejected, a second execute of one plan is rejected, and a new scan invalidates the old plan.
+- Partial failure leaves the other items moved and reports each result.
+- Guardrails still block system paths and the home standard folders, and a protected path may be kept but never moved.
+- Reference-folder mode: nothing in the protected folder is ever offered for moving.
+- Cancellation stops each stage promptly and leaves no plan behind.
+- Keep-one ordering is deterministic, including ties.
+- A source search confirms no permanent-delete call outside tests.
+
+**Risks and open questions**
+- **A home-folder scan can still be slow and large.** `$HOME` had 313,450 tree nodes on the dev machine, and hashing reads file contents, which the treemap scan does not. Mitigations are the size filter, early dropping, cancellation and incremental results; none of it is measured yet. Cold-cache and external-volume behaviour is untested, as in sub-task 8.
+- **Trash does not free space** (see sub-task 9). Same recommendation: keep the no-hard-delete rule and state it plainly. An "Empty Trash" step needs your explicit decision.
+- **APFS clones.** Two files can have equal content and share storage, so removing one frees nothing. The preview may overstate the gain until clone detection is checked.
+- **App-managed duplicates.** Files inside bundles, libraries (Photos, Music) and developer folders may be duplicated on purpose. The exclusions reduce the risk but the list is judgement-based.
+- **Put Back.** Restoring may be manual for items moved with `NSFileManager` (sub-task 7). The log records original paths.
+- **Hash choice and dependency.** Confirm the crate, its licence and its macOS build before adding it. This also changes the binary size; remeasure.
+- **Files in use.** A file open in an app can change while being hashed. The size and modification-time re-check at plan and execute time is the safeguard; it is not a guarantee.
+- **Cloud placeholders.** Reading `dataless` files could trigger downloads, so they are skipped. Not tested on iCloud.
+
+**Decisions (user)**
+1. Default scope: the home folder only, not the whole disk.
+2. Pre-selection: nothing selected at the start. "Select suggested duplicates" is an explicit button.
+3. Default minimum size: 1 MiB.
+4. Reference-folder mode: in the first release.
+5. Replacing duplicates with clones or hard links: not planned. Trash only. It stays under "Later" and needs a new decision before anyone builds it.
+
+---
+
+
 
 ## Future Phases (not in this plan's scope)
 
-- **Duplicate detection and duplicate cleanup (deferred by user):** re-walk files, group by size, then partial hash, then full hash. Uses the small files that MVP aggregates away. Cleanup needs a "which copy do I keep" rule and must never remove the last copy.
+- **Duplicate detection and duplicate cleanup:** now planned as sub-task 10 above.
 - **Review-tier cache cleanup (deferred by user):** `node_modules` and Rust `target/` next to a manifest, old installers in Downloads, Xcode `iOS DeviceSupport`. Builds on sub-task 9.
 - **Stale and unused file analysis:** needs OS-aware signals because last-access times differ in reliability across platforms.
 - **Windows port:** implement the platform traits for Windows. Optional faster scan path that may need elevated rights.
@@ -579,3 +865,5 @@ Measured on this machine (one machine, one point in time):
 ## Implementation Order
 
 Tasks 1 and 2 first, then 3, then 5 and 4, then 6, then 7, then 8. Each sub-task should be completed and reviewed before starting the next.
+
+Sub-tasks 9 and 10 were added later and build on 7. Sub-task 10 is built end to end in code; its next step is the manual run in its "Next" block. Sub-task 9 still has its own open items (see its status line).

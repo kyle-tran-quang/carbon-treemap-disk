@@ -66,6 +66,14 @@ export function AppHeader({
         >
           Clean up caches
         </HeaderMenuItem>
+        <HeaderMenuItem
+          href="#duplicates"
+          isActive={view === 'duplicates'}
+          aria-current={view === 'duplicates' ? 'page' : undefined}
+          onClick={go('duplicates')}
+        >
+          Find duplicates
+        </HeaderMenuItem>
       </HeaderNavigation>
       <HeaderGlobalBar>
         <HeaderGlobalAction

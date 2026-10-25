@@ -25,7 +25,7 @@ use super::bulk::{BulkKind, read_dir_bulk};
 use super::cloud::CloudFolders;
 
 /// Benchmarks showed no gain (and a small loss) beyond 8 threads.
-const MAX_DEFAULT_THREADS: usize = 8;
+pub(super) const MAX_DEFAULT_THREADS: usize = 8;
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
 const CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(50);
 

@@ -5,6 +5,7 @@ import { AppSideNav } from './components/AppSideNav';
 import { CleanupModal } from './components/CleanupModal';
 import { SelectionActionBar } from './components/SelectionActionBar';
 import { CleanupView } from './components/CleanupView';
+import { DuplicatesView } from './components/DuplicatesView';
 import { FullDiskAccessNotice } from './components/FullDiskAccessNotice';
 import { ScanPanel } from './components/ScanPanel';
 import { TreemapExplorer } from './components/TreemapExplorer';
@@ -12,6 +13,7 @@ import { pickFolder, type CleanupResult } from './ipc';
 import { addRecentRoot, loadRecentRoots, saveRecentRoots } from './state/recentRoots';
 import { useCleanup } from './state/useCleanup';
 import { useCleanupScan } from './state/useCleanupScan';
+import { useDuplicates } from './state/useDuplicates';
 import { useExplorer } from './state/useExplorer';
 import { useScan } from './state/useScan';
 import { ThemeProvider, useTheme } from './state/ThemeContext';
@@ -23,6 +25,7 @@ function AppShell() {
   const [recentRoots, setRecentRoots] = useState(loadRecentRoots);
   const [view, setView] = useState<AppView>('treemap');
   const cleanupScan = useCleanupScan();
+  const duplicates = useDuplicates();
 
   // Switching views unmounts the item that had focus, so move focus to the new
   // page heading. Skipped on first render so startup focus is left alone.
@@ -102,13 +105,16 @@ function AppShell() {
                 onScan={(root) => void start(root)}
                 onCancel={cancel}
               />
-              <TreemapExplorer
-                explorer={explorer}
-                theme={theme}
-              />
+              <TreemapExplorer explorer={explorer} theme={theme} />
             </>
-          ) : (
+          ) : view === 'cleanup' ? (
             <CleanupView scan={cleanupScan} />
+          ) : (
+            <DuplicatesView
+              duplicates={duplicates}
+              recentRoots={recentRoots}
+              onFolderScanned={rememberRoot}
+            />
           )}
           <CleanupModal
             state={cleanup.state}
@@ -138,6 +144,16 @@ function AppShell() {
               void cleanup.begin(explorer.selection.map((item) => item.id))
             }
           />
+        ) : view === 'duplicates' ? (
+          <SelectionActionBar
+            count={duplicates.selection.count}
+            bytes={duplicates.selection.bytes}
+            primaryLabel="Review and move to Trash"
+            primaryDisabled={
+              duplicates.selection.count === 0 || duplicates.move.step !== 'closed'
+            }
+            onPrimary={() => void duplicates.begin()}
+          />
         ) : (
           <SelectionActionBar
             count={cleanupScan.selected.size}
@@ -155,7 +171,9 @@ function AppShell() {
                 : undefined
             }
             primaryLabel="Review and move to Trash"
-            primaryDisabled={cleanupScan.selected.size === 0 || cleanupScan.move.step !== 'closed'}
+            primaryDisabled={
+              cleanupScan.selected.size === 0 || cleanupScan.move.step !== 'closed'
+            }
             onPrimary={() => void cleanupScan.begin()}
           />
         )}

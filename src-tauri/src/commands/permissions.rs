@@ -1,5 +1,5 @@
-//! Permission commands: Full Disk Access status and a shortcut to the
-//! System Settings pane where the user grants it.
+//! Permission commands: Full Disk Access status, a shortcut to the
+//! System Settings pane where the user grants it, and Quick Look preview.
 
 use std::process::Command;
 
@@ -50,6 +50,18 @@ pub fn open_full_disk_access_settings() -> Result<(), String> {
                 .then_some(())
                 .ok_or_else(|| format!("`open` exited with {status}"))
         })
+}
+
+/// Open a Quick Look panel for a file. Fire-and-forget: `qlmanage` is spawned
+/// as a detached process; we do not wait for it. Returns an error only if the
+/// process could not be spawned at all (e.g. `qlmanage` not found).
+#[tauri::command]
+pub fn preview_file(path: String) -> Result<(), String> {
+    Command::new("qlmanage")
+        .args(["-p", &path])
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]

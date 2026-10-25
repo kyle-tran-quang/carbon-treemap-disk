@@ -50,6 +50,16 @@ pub enum CleanupErrorKind {
     UnknownCandidate,
     DiscoveryRunning,
     Cancelled,
+    /// No duplicate scan has completed, or a newer one replaced it.
+    NoDuplicateScan,
+    DuplicateScanRunning,
+    /// The selection would move every copy of a file.
+    LastCopy,
+    /// The selection names a copy in a protected folder.
+    ProtectedFile,
+    /// A folder for the duplicate scan does not exist or is not a folder.
+    InvalidRoot,
+    PermissionDenied,
     Other,
 }
 

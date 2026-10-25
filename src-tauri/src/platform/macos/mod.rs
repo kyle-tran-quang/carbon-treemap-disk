@@ -4,6 +4,8 @@
 mod bulk;
 mod catalog;
 mod cloud;
+mod content_hasher;
+mod file_walker;
 mod guardrails;
 mod permissions;
 mod scanner;
@@ -11,6 +13,10 @@ mod size_accounting;
 mod trash;
 
 pub use catalog::{catalog_roots, name_rules};
+#[allow(unused_imports)]
+pub use content_hasher::MacContentHasher;
+#[allow(unused_imports)]
+pub use file_walker::MacFileWalker;
 pub use guardrails::{AppPaths, app_bundle_or_exe, protected_paths};
 #[allow(unused_imports)]
 pub use permissions::MacPermissionChecker;

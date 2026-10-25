@@ -158,6 +158,12 @@ export type CleanupErrorKind =
   | 'unknownCandidate'
   | 'discoveryRunning'
   | 'cancelled'
+  | 'noDuplicateScan'
+  | 'duplicateScanRunning'
+  | 'lastCopy'
+  | 'protectedFile'
+  | 'invalidRoot'
+  | 'permissionDenied'
   | 'other';
 
 export interface CleanupError {
@@ -213,6 +219,147 @@ export interface CandidateCleanupResult {
   movedBytes: number;
   /** False if the moved items could not be written to the cleanup log. */
   logSaved: boolean;
+}
+
+// --- duplicate finder ---
+
+export interface DuplicateExclusions {
+  /** App bundles and other packages. */
+  packages: boolean;
+  nodeModules: boolean;
+  git: boolean;
+  library: boolean;
+  trash: boolean;
+}
+
+export interface DuplicateScanRequest {
+  /** The home folder when omitted. */
+  root?: string;
+  /** Copies in these folders may be kept but are never moved. */
+  protectedRoots: string[];
+  minSizeBytes?: number;
+  includeCloudFolders?: boolean;
+  exclusions?: Partial<DuplicateExclusions>;
+}
+
+export interface DuplicateSummary {
+  root: string;
+  protectedRoots: string[];
+  minSizeBytes: number;
+  groupCount: number;
+  reclaimableBytes: number;
+  filesListed: number;
+  bytesHashed: number;
+  hardLinksCollapsed: number;
+  /** The full count. `issues` lists only the first few. */
+  issueCount: number;
+  issues: ScanIssue[];
+  skippedCloudFolders: string[];
+}
+
+export type DuplicateStage = 'listing' | 'fingerprinting' | 'hashing';
+
+export interface DuplicateProgress {
+  stage: DuplicateStage;
+  done: number;
+  /** Zero while the total is not known. */
+  total: number;
+  bytes: number;
+  currentPath: string;
+}
+
+export type DuplicateSort = 'wastedSpace' | 'fileSize' | 'copyCount';
+
+export type KeepReason =
+  | 'protected'
+  | 'pinned'
+  | 'betterLocation'
+  | 'originalName'
+  | 'oldest'
+  | 'shortestPath'
+  | 'nameOrder';
+
+export interface DuplicateFile {
+  /** Valid only for the scan that produced it. */
+  id: number;
+  path: string;
+  name: string;
+  folder: string;
+  /** Seconds since the Unix epoch. */
+  modifiedSecs: number;
+  /** In a protected folder. Can be kept, never moved. */
+  protected: boolean;
+  suggestedKeep: boolean;
+}
+
+export interface DuplicateGroup {
+  id: number;
+  /** Bytes per copy. */
+  size: number;
+  reclaimableBytes: number;
+  reclaimableFiles: number;
+  keepReason: KeepReason | null;
+  /** Plain words for the suggested keeper. */
+  keepReasonText: string | null;
+  files: DuplicateFile[];
+}
+
+export interface DuplicateGroupsPage {
+  groups: DuplicateGroup[];
+  totalGroups: number;
+  offset: number;
+  reclaimableBytes: number;
+}
+
+export interface DuplicatePick {
+  group: number;
+  /** The copies to move. */
+  files: number[];
+}
+
+export interface SuggestedPicks {
+  picks: DuplicatePick[];
+  moveCount: number;
+  bytes: number;
+  /** The suggestion stopped at the most one plan may move. */
+  truncated: boolean;
+}
+
+export interface KeptCopy {
+  id: number;
+  path: string;
+  name: string;
+  protected: boolean;
+}
+
+export interface PlannedGroup {
+  group: number;
+  size: number;
+  kept: KeptCopy[];
+  moves: PlanItem[];
+}
+
+export interface DuplicatePlan {
+  planId: number;
+  /** Largest total first. */
+  groups: PlannedGroup[];
+  excluded: ExcludedItem[];
+  totalBytes: number;
+  totalFiles: number;
+  needsAcknowledgement: boolean;
+}
+
+export interface DuplicateCleanupResult {
+  /** `node` is the file id. */
+  results: CleanupItemResult[];
+  moved: number;
+  alreadyGone: number;
+  failed: number;
+  movedBytes: number;
+  /** False if the moved files could not be written to the cleanup log. */
+  logSaved: boolean;
+  remainingGroups: number;
+  remainingReclaimableBytes: number;
 }
 
 const SCAN_ERROR_KINDS: readonly string[] = [
@@ -281,6 +428,12 @@ const CLEANUP_ERROR_KINDS: readonly string[] = [
   'unknownCandidate',
   'discoveryRunning',
   'cancelled',
+  'noDuplicateScan',
+  'duplicateScanRunning',
+  'lastCopy',
+  'protectedFile',
+  'invalidRoot',
+  'permissionDenied',
   'other',
 ];
 
@@ -363,6 +516,74 @@ export function onCleanupProgress(
   return listen<DiscoveryProgress>('cleanup-progress', (event) => handler(event.payload));
 }
 
+/** Finds duplicate files. Read-only. Rejects with `cancelled` if cancelled. */
+export async function startDuplicateScan(
+  request: DuplicateScanRequest,
+): Promise<DuplicateSummary> {
+  try {
+    return await invoke<DuplicateSummary>('start_duplicate_scan', { request });
+  } catch (raw) {
+    throw toCleanupError(raw);
+  }
+}
+
+export function cancelDuplicateScan(): Promise<void> {
+  return invoke<void>('cancel_duplicate_scan');
+}
+
+export async function getDuplicateGroups(
+  request: { sort?: DuplicateSort; offset?: number; limit?: number } = {},
+): Promise<DuplicateGroupsPage> {
+  try {
+    return await invoke<DuplicateGroupsPage>('get_duplicate_groups', { request });
+  } catch (raw) {
+    throw toCleanupError(raw);
+  }
+}
+
+/** One keeper per group, chosen by Rust. Nothing is selected or moved. */
+export async function suggestDuplicatePicks(): Promise<SuggestedPicks> {
+  try {
+    return await invoke<SuggestedPicks>('suggest_duplicate_picks');
+  } catch (raw) {
+    throw toCleanupError(raw);
+  }
+}
+
+/** Dry run for the chosen copies. Nothing is moved. */
+export async function planDuplicateCleanup(
+  picks: DuplicatePick[],
+): Promise<DuplicatePlan> {
+  try {
+    return await invoke<DuplicatePlan>('plan_duplicate_cleanup', { picks });
+  } catch (raw) {
+    throw toCleanupError(raw);
+  }
+}
+
+/** Moves the copies of a plan to the Trash. A plan can be executed once. */
+export async function executeDuplicateCleanup(
+  planId: number,
+  acknowledged: boolean,
+): Promise<DuplicateCleanupResult> {
+  try {
+    return await invoke<DuplicateCleanupResult>('execute_duplicate_cleanup', {
+      planId,
+      acknowledged,
+    });
+  } catch (raw) {
+    throw toCleanupError(raw);
+  }
+}
+
+export function onDuplicateProgress(
+  handler: (progress: DuplicateProgress) => void,
+): Promise<UnlistenFn> {
+  return listen<DuplicateProgress>('duplicate-progress', (event) =>
+    handler(event.payload),
+  );
+}
+
 export function onScanProgress(
   handler: (progress: ScanProgress) => void,
 ): Promise<UnlistenFn> {
@@ -378,4 +599,9 @@ export async function pickFolder(): Promise<string | null> {
 /** Reveals a file or folder in Finder (macOS) / Explorer (Windows). */
 export function showInFinder(path: string): Promise<void> {
   return revealItemInDir(path);
+}
+
+/** Opens a Quick Look panel for a file (macOS). Fire-and-forget. */
+export function previewFile(path: string): Promise<void> {
+  return invoke('preview_file', { path });
 }

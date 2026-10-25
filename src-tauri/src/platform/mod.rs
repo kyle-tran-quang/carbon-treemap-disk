@@ -9,6 +9,7 @@ use std::io;
 use std::path::Path;
 
 use crate::core::config::ScanOptions;
+use crate::core::duplicates::{DuplicateOptions, WalkOutput};
 use crate::core::scan::{CancelToken, ScanOutput, ScanProgress};
 
 #[cfg(target_os = "macos")]
@@ -25,6 +26,23 @@ pub trait Scanner: Send + Sync {
         cancel: &CancelToken,
         on_progress: &(dyn Fn(ScanProgress) + Sync),
     ) -> io::Result<ScanOutput>;
+}
+
+/// Lists the regular files under one root for the duplicate finder.
+/// Implementations must not follow symlinks, must skip anything that is not a
+/// regular file, should skip files below `options.min_size` (the finder drops
+/// them anyway, but keeping them costs memory), must report the device and
+/// inode of every file, must record unreadable paths as issues instead of
+/// failing, and must stop promptly when `cancel` is set. An error is for a root
+/// that cannot be read at all.
+pub trait FileWalker: Send + Sync {
+    fn walk(
+        &self,
+        root: &Path,
+        options: &DuplicateOptions,
+        cancel: &CancelToken,
+        on_progress: &(dyn Fn(ScanProgress) + Sync),
+    ) -> io::Result<WalkOutput>;
 }
 
 /// Decides how many bytes a file contributes to disk usage.

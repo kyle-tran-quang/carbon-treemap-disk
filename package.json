@@ -8,6 +8,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
+    "release:mac": "bash scripts/release-macos.sh",
     "lint": "eslint src --max-warnings 0",
     "format": "prettier --write \"src/**/*.{ts,tsx,scss,css}\"",
     "format:check": "prettier --check \"src/**/*.{ts,tsx,scss,css}\"",

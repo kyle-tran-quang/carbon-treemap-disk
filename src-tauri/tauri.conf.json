@@ -27,7 +27,8 @@
     "active": true,
     "targets": "all",
     "macOS": {
-      "signingIdentity": "Apple Development: teaquangburo@gmail.com (BBCS9PMAN9)"
+      "minimumSystemVersion": "10.15",
+      "signingIdentity": "-"
     },
     "icon": [
       "icons/32x32.png",

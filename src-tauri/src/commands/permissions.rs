@@ -7,6 +7,7 @@ use serde::Serialize;
 
 use crate::platform::{FullDiskAccess, PermissionChecker};
 
+#[cfg(target_os = "macos")]
 const FULL_DISK_ACCESS_SETTINGS_URL: &str =
     "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles";
 
@@ -33,11 +34,17 @@ fn make_checker() -> impl PermissionChecker {
     crate::platform::macos::MacPermissionChecker::new()
 }
 
+#[cfg(target_os = "windows")]
+fn make_checker() -> impl PermissionChecker {
+    crate::platform::windows::WinPermissionChecker::new()
+}
+
 #[tauri::command]
 pub fn check_full_disk_access() -> FullDiskAccessStatus {
     make_checker().full_disk_access().into()
 }
 
+#[cfg(target_os = "macos")]
 #[tauri::command]
 pub fn open_full_disk_access_settings() -> Result<(), String> {
     Command::new("open")
@@ -52,13 +59,35 @@ pub fn open_full_disk_access_settings() -> Result<(), String> {
         })
 }
 
-/// Open a Quick Look panel for a file. Fire-and-forget: `qlmanage` is spawned
-/// as a detached process; we do not wait for it. Returns an error only if the
-/// process could not be spawned at all (e.g. `qlmanage` not found).
+/// On Windows there is no equivalent "Full Disk Access" settings pane.
+/// Opens the broad file-system access privacy setting (Windows 10+).
+#[cfg(target_os = "windows")]
+#[tauri::command]
+pub fn open_full_disk_access_settings() -> Result<(), String> {
+    Command::new("explorer.exe")
+        .arg("ms-settings:privacy-broadfilesystemaccess")
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+/// Open a Quick Look panel for a file on macOS.
+#[cfg(target_os = "macos")]
 #[tauri::command]
 pub fn preview_file(path: String) -> Result<(), String> {
     Command::new("qlmanage")
         .args(["-p", &path])
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+/// Reveal the file in Explorer on Windows.
+#[cfg(target_os = "windows")]
+#[tauri::command]
+pub fn preview_file(path: String) -> Result<(), String> {
+    Command::new("explorer.exe")
+        .args(["/select,", &path])
         .spawn()
         .map(|_| ())
         .map_err(|e| e.to_string())

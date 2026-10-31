@@ -279,6 +279,47 @@ fn run_discovery(
     })
 }
 
+#[cfg(target_os = "windows")]
+fn run_discovery(
+    app: &AppHandle,
+    token: &CancelToken,
+) -> Result<Discovery, crate::core::cleanup_discovery::Cancelled> {
+    use crate::core::cleanup_catalog::RECENT_WINDOW;
+    use crate::core::cleanup_discovery::{DiscoveryContext, discover};
+    use crate::platform::windows::{WinScanner, WinSizeAccounting, catalog_roots, name_rules};
+    use std::path::PathBuf;
+    use std::time::SystemTime;
+
+    let Some(home) = std::env::var_os("USERPROFILE")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .and_then(|p| p.canonicalize().ok())
+    else {
+        return Ok(Discovery::default());
+    };
+    let roots = catalog_roots(&home);
+    let rules = name_rules(&[&app.config().identifier, &app.package_info().name]);
+    let scanner = WinScanner::new();
+    let sizing = WinSizeAccounting::new();
+    let ctx = DiscoveryContext {
+        roots: &roots,
+        rules: &rules,
+        now: SystemTime::now(),
+        recent_window: RECENT_WINDOW,
+        scanner: &scanner,
+        sizing: &sizing,
+    };
+    discover(&ctx, token, &|progress| {
+        let _ = app.emit(
+            PROGRESS_EVENT,
+            ProgressPayload {
+                found: progress.found,
+                current_path: progress.current.to_string_lossy().into_owned(),
+            },
+        );
+    })
+}
+
 #[tauri::command]
 pub async fn discover_cleanup(
     app: AppHandle,

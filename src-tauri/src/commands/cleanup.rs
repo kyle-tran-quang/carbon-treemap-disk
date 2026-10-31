@@ -228,6 +228,11 @@ pub(super) fn make_provider() -> impl TrashProvider {
     crate::platform::macos::MacTrashProvider::new()
 }
 
+#[cfg(target_os = "windows")]
+pub(super) fn make_provider() -> impl TrashProvider {
+    crate::platform::windows::WinTrashProvider::new()
+}
+
 #[cfg(target_os = "macos")]
 pub(super) fn make_guardrails(app: &AppHandle) -> Guardrails {
     use crate::platform::macos::{AppPaths, app_bundle_or_exe, protected_paths};
@@ -254,6 +259,35 @@ pub(super) fn make_guardrails(app: &AppHandle) -> Guardrails {
         executable: std::env::current_exe()
             .ok()
             .map(|exe| app_bundle_or_exe(&canonical(exe))),
+        identifier: app.config().identifier.clone(),
+    };
+    Guardrails::new(home.clone(), protected_paths(home.as_deref(), &app_paths))
+}
+
+#[cfg(target_os = "windows")]
+pub(super) fn make_guardrails(app: &AppHandle) -> Guardrails {
+    use crate::platform::windows::{AppPaths, protected_paths};
+
+    let canonical = |path: PathBuf| path.canonicalize().unwrap_or(path);
+    let home = std::env::var_os("USERPROFILE")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .map(canonical);
+    let paths = app.path();
+    let data_dirs = [
+        paths.app_data_dir(),
+        paths.app_local_data_dir(),
+        paths.app_cache_dir(),
+        paths.app_config_dir(),
+        paths.app_log_dir(),
+    ]
+    .into_iter()
+    .filter_map(Result::ok)
+    .map(canonical)
+    .collect();
+    let app_paths = AppPaths {
+        data_dirs,
+        executable: std::env::current_exe().ok().map(canonical),
         identifier: app.config().identifier.clone(),
     };
     Guardrails::new(home.clone(), protected_paths(home.as_deref(), &app_paths))

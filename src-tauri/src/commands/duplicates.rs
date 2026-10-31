@@ -754,13 +754,32 @@ fn make_walker() -> impl FileWalker {
     crate::platform::macos::MacFileWalker::new()
 }
 
+#[cfg(target_os = "windows")]
+fn make_walker() -> impl FileWalker {
+    crate::platform::windows::WinFileWalker::new()
+}
+
 #[cfg(target_os = "macos")]
 fn make_hasher() -> impl ContentHasher {
     crate::platform::macos::MacContentHasher
 }
 
+#[cfg(target_os = "windows")]
+fn make_hasher() -> impl ContentHasher {
+    crate::platform::windows::WinContentHasher
+}
+
+#[cfg(target_os = "macos")]
 fn home_folder() -> Option<PathBuf> {
     std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .and_then(|p| p.canonicalize().ok())
+}
+
+#[cfg(target_os = "windows")]
+fn home_folder() -> Option<PathBuf> {
+    std::env::var_os("USERPROFILE")
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
         .and_then(|p| p.canonicalize().ok())

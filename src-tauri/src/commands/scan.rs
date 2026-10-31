@@ -139,6 +139,11 @@ fn make_scanner() -> impl Scanner {
     crate::platform::macos::MacScanner::new()
 }
 
+#[cfg(target_os = "windows")]
+fn make_scanner() -> impl Scanner {
+    crate::platform::windows::WinScanner::new()
+}
+
 /// Clears the active-scan slot on every exit path.
 struct ActiveGuard<'a>(&'a Mutex<Option<CancelToken>>);
 

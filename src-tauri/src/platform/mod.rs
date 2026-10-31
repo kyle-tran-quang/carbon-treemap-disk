@@ -15,6 +15,9 @@ use crate::core::scan::{CancelToken, ScanOutput, ScanProgress};
 #[cfg(target_os = "macos")]
 pub mod macos;
 
+#[cfg(target_os = "windows")]
+pub mod windows;
+
 /// Walks a directory tree and builds the arena `Tree`.
 /// Implementations must not follow symlinks, must record unreadable paths as
 /// issues instead of failing, and must stop promptly when `cancel` is set.
